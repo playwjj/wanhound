@@ -8,6 +8,8 @@ package intel
 import (
 	"fmt"
 	"net"
+
+	"github.com/playwjj/wanhound/internal/i18n"
 )
 
 // Class is the address classification of a target IP.
@@ -108,24 +110,14 @@ func isReserved(ip net.IP) bool {
 }
 
 // Scannable reports whether probing this class of address is meaningful,
-// with a human-readable explanation when it is not.
-func Scannable(c Class) (bool, string) {
-	switch c {
-	case ClassPublic:
-		return true, ""
-	case ClassCGNAT:
-		return false, "this address is in 100.64.0.0/10 (carrier-grade NAT): inbound connections terminate at the carrier's NAT, not at your home, so scanning it audits the carrier — not your network. Find the address your router shows on its WAN interface instead; if that is also in this range, your connection has no public IPv4 exposure to audit."
-	case ClassPrivate, ClassULA:
-		return false, "this is a private/LAN address. WanHound audits your public address from the outside; a private address can only be reached from inside the network (see LanHound for the inside view)."
-	case ClassLoopback:
-		return false, "this is a loopback address; it exists only on the machine running the tool."
-	case ClassLinkLocal:
-		return false, "this is a link-local address; it is not routed beyond the local segment."
-	case ClassReserved:
-		return false, "this address is in a reserved range (documentation, benchmarking or multicast). 198.18.0.0/15 in particular is what fake-IP proxies (Clash/Surge TUN mode) hand out — it is not your home's address."
-	case ClassUnspecified:
-		return false, "this is the unspecified address (0.0.0.0 / ::); it names no host."
-	default:
-		return false, "unrecognized address class."
+// with an explanation when it is not.
+func Scannable(c Class) (bool, i18n.Msg) {
+	if c == ClassPublic {
+		return true, i18n.Msg{}
 	}
+	key := c.String()
+	if c == ClassULA {
+		key = "private"
+	}
+	return false, i18n.M("err.class." + key)
 }

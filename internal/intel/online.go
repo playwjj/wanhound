@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/playwjj/wanhound/internal/i18n"
 )
 
 // Profile is passive context about a target address: who announces it
@@ -18,13 +20,13 @@ import (
 // but it does show the address to a third-party lookup service — the
 // report says so, and --offline skips it entirely.
 type Profile struct {
-	ASN     string   `json:"asn,omitempty"`
-	Org     string   `json:"org,omitempty"`
-	Country string   `json:"country,omitempty"`
-	PTR     []string `json:"ptr,omitempty"`
-	Source  string   `json:"source,omitempty"` // lookup service used
-	Hints   []string `json:"hints,omitempty"`
-	Error   string   `json:"error,omitempty"`
+	ASN     string     `json:"asn,omitempty"`
+	Org     string     `json:"org,omitempty"`
+	Country string     `json:"country,omitempty"`
+	PTR     []string   `json:"ptr,omitempty"`
+	Source  string     `json:"source,omitempty"` // lookup service used
+	Hints   []i18n.Msg `json:"hints,omitempty"`
+	Error   string     `json:"error,omitempty"`
 }
 
 var client = &http.Client{Timeout: 6 * time.Second}
@@ -50,11 +52,11 @@ func Lookup(ctx context.Context, ip net.IP) Profile {
 		}
 	}
 	if mobileOrg.MatchString(p.Org) {
-		p.Hints = append(p.Hints, "This operator commonly uses carrier-grade NAT. If this address came from an 'what is my IP' site rather than your router's WAN status page, it may be a NAT exit shared with other customers — and the scan would audit the carrier's equipment, not your home.")
+		p.Hints = append(p.Hints, i18n.M("hint.mobile"))
 	}
 	for _, n := range p.PTR {
 		if natPTR.MatchString(n) {
-			p.Hints = append(p.Hints, fmt.Sprintf("Reverse DNS %q looks like a carrier NAT/pool name.", n))
+			p.Hints = append(p.Hints, i18n.M("hint.ptr", n))
 			break
 		}
 	}

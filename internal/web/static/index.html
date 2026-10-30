@@ -11,15 +11,16 @@
 <header class="top">
   <a class="brand" href="#/"><img src="logo.svg" alt="" width="28" height="28"><span>Wan<b>Hound</b></span></a>
   <nav id="nav" hidden>
-    <a href="#/">New audit</a>
-    <a href="#/task">Current</a>
-    <a href="#/history">History</a>
-    <a href="#/log">Audit log</a>
-    <button id="logout" class="link" type="button">Log out</button>
+    <a href="#/" data-i18n="nav_new">New audit</a>
+    <a href="#/task" data-i18n="nav_task">Current</a>
+    <a href="#/history" data-i18n="nav_history">History</a>
+    <a href="#/log" data-i18n="nav_log">Audit log</a>
+    <button id="logout" class="link" type="button" data-i18n="logout">Log out</button>
   </nav>
+  <button id="lang" class="link" type="button" data-i18n="lang_switch" aria-label="Language / 语言">中文</button>
 </header>
 <main id="app"><p class="muted">Loading…</p></main>
-<footer class="foot">Self-audit of your own home network's public exposure. Only audit addresses you own or are authorized to test.</footer>
+<footer class="foot" data-i18n="footer">Self-audit of your own home network's public exposure. Only audit addresses you own or are authorized to test.</footer>
 <script src="app.js"></script>
 </body>
 </html>

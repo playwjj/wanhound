@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,12 +73,12 @@ func TestDiffRespectsCoverage(t *testing.T) {
 	full := snap("home", "198.51.100.1", "full", "1-65535", t0, 22, 40000)
 	quick := snap("home", "198.51.100.1", "quick", "22,80,443", t0.Add(time.Hour), 22)
 	ch := Diff(full, quick)
-	if len(ch.Closed) != 0 || ch.Coverage == "" {
-		t.Errorf("full→quick: closed=%v coverage=%q", ch.Closed, ch.Coverage)
+	if len(ch.Closed) != 0 || ch.Coverage == nil {
+		t.Errorf("full→quick: closed=%v coverage=%v", ch.Closed, ch.Coverage)
 	}
 	ch = Diff(quick, full)
-	if len(ch.Opened) != 0 || ch.Coverage == "" {
-		t.Errorf("quick→full: opened=%v coverage=%q", ch.Opened, ch.Coverage)
+	if len(ch.Opened) != 0 || ch.Coverage == nil {
+		t.Errorf("quick→full: opened=%v coverage=%v", ch.Opened, ch.Coverage)
 	}
 }
 
@@ -99,5 +101,25 @@ func TestValidLabel(t *testing.T) {
 	}
 	if ValidLabel("武汉的家") != nil {
 		t.Error("unicode labels must be allowed")
+	}
+}
+
+// Snapshots written by v0.2.0 stored notes and coverage as plain strings.
+func TestReadsV020Snapshot(t *testing.T) {
+	var s Snapshot
+	err := json.Unmarshal([]byte(`{"id":"x","label":"home","family":"v4","ip":"198.51.100.1","notes":["old note"],"changes":{"coverage":"old coverage"}}`), &s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Notes) != 1 || s.Notes[0].Render("zh") != "old note" || s.Changes.Coverage.Render("en") != "old coverage" {
+		t.Errorf("v0.2.0 strings not preserved: %+v", s)
+	}
+}
+
+func TestCoverageLocalized(t *testing.T) {
+	t0 := time.Now()
+	ch := Diff(snap("home", "198.51.100.1", "full", "1-65535", t0, 22, 40000), snap("home", "198.51.100.1", "quick", "22", t0, 22))
+	if zh := ch.Coverage.Render("zh"); !strings.Contains(zh, "全端口") || !strings.Contains(zh, "快速") {
+		t.Errorf("coverage zh = %q", zh)
 	}
 }

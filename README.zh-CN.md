@@ -19,7 +19,7 @@
 WanHound 是 [LanHound](https://github.com/playwjj/lanhound) 的"外侧"姊妹工具：LanHound 在局域网**里面**看有哪些设备，WanHound 在外面看哪些门朝着大街开。
 
 <p align="center">
-  <img src="docs/images/report.jpg" width="820" alt="WanHound 报告：按风险着色的开放端口、证据，以及与上周相比的变化">
+  <img src="docs/images/report.zh.jpg" width="820" alt="WanHound 报告：按风险着色的开放端口、证据，以及与上周相比的变化">
 </p>
 
 ## 能做什么
@@ -33,6 +33,8 @@ WanHound 是 [LanHound](https://github.com/playwjj/lanhound) 的"外侧"姊妹�
 - **UDP 小集**（DNS——含开放解析器检测、NTP、IKE、OpenVPN、SSDP/UPnP、mDNS、WireGuard），明确标注仅供参考。
 - **快照对比**：历史按**家庭标签**保存（不按 IP，因为家宽地址会变），地址变化记为事件，下一次运行会把**新开放的端口**放在报告最前面。对比会考虑扫描覆盖范围：全端口审计之后用 `--quick` 复检，不会把高位端口误报为"已关闭"。
 - **扫描前的位置自检**：私网、回环、CGNAT（`100.64.0.0/10`）和保留地址会被拒绝并说明原因；如果本机的公网出口**就是**目标地址，或者本机的透明代理 / TUN 模式 VPN 在替所有端口应答，WanHound 会停下来说明原因，而不是给出一份失真的报告。
+- **中文 / 英文报告**：终端、HTML、Web 界面和推送摘要都支持中文。
+- **配合 LanHound**：读取 LanHound 导出的设备表，逐个审计每台设备的公网 IPv6。
 - **CLI + Web UI，同一个二进制**：`wanhound scan` 供脚本和 cron 使用（退出码约定、JSON、独立 HTML 报告、可选 Telegram 推送）；`wanhound serve` 提供口令保护的网页界面，带实时进度、历史时间线和并排对比。
 
 ## 和其他工具的区别
@@ -67,20 +69,20 @@ make build
 
 ```bash
 docker run --rm -v wanhound-data:/home/wanhound/.local/share/wanhound \
-  ghcr.io/playwjj/wanhound scan --ipv4 <你的公网IP> --label home
+  ghcr.io/playwjj/wanhound scan --ipv4 <家里的IPv4> --label home
 ```
 
-**在家庭网络之外**运行扫描（下面的地址是文档示例地址，请换成你自己的）：
+**在家庭网络之外**运行扫描，地址用路由器 WAN 口显示的公网地址（下面是占位符；`198.51.100.x` 这类文档示例地址属于保留段，会被拒绝）：
 
 ```bash
 # 同时审计双栈，结果存到标签 "home" 下
-./wanhound scan --ipv4 198.51.100.23 --ipv6 2001:db8:85a3::7 --label home
+./wanhound scan --ipv4 <家里的IPv4> --ipv6 <家里的IPv6> --label home
 
 # 用精选端口集快速复检
-./wanhound scan --ipv4 198.51.100.23 --label home --quick
+./wanhound scan --ipv4 <家里的IPv4> --label home --quick
 
 # 只扫几个端口（加 --udp 同时探测 UDP 小集）
-./wanhound scan --ipv4 198.51.100.23 --ports 22,80,443,8291
+./wanhound scan --ipv4 <家里的IPv4> --ports 22,80,443,8291
 
 # 历史和已保存的报告
 ./wanhound history                       # 列出所有标签
@@ -114,7 +116,7 @@ Findings (worst first):
     …
 ```
 
-> 目前报告内容为英文；规则说明和建议都在 `internal/knowledge/rules.json` 中，欢迎贡献中文翻译。
+> 报告支持中文：`--lang zh`，或在中文环境（`LANG=zh_CN.UTF-8`）下自动使用中文；也可以设置 `WANHOUND_LANG=zh`。Web 界面右上角可切换中文 / English。上面的示例输出为英文版。
 
 关于报告：
 
@@ -133,7 +135,7 @@ Findings (worst first):
 
 ```bash
 # crontab：每天快速复检，只有退出码为 1 时才推送 Telegram
-0 7 * * * WANHOUND_TELEGRAM_TOKEN=… WANHOUND_TELEGRAM_CHAT=… wanhound scan --ipv4 198.51.100.23 --label home --quick
+0 7 * * * WANHOUND_TELEGRAM_TOKEN=… WANHOUND_TELEGRAM_CHAT=… wanhound scan --ipv4 <家里的IPv4> --label home --quick
 ```
 
 `--json` 输出完整的机器可读结果；`--html report.html` 生成一页独立的 HTML 报告（样式内联，手机上也能看——适合发给家人）。
@@ -150,6 +152,21 @@ Findings (worst first):
 | `--concurrency` / `--rate` | 512 / 每秒 2000 | 硬上限 2048 / 10000。 |
 | `--yes` | 关 | 位置自检提出异议时仍继续。 |
 | `--data-dir` | `~/.local/share/wanhound` | 也可用 `WANHOUND_DATA`。 |
+| `--lang` | 随系统语言 | 报告语言：`zh` / `en`（也可用 `WANHOUND_LANG`）。 |
+
+### 配合 LanHound：逐个审计设备的 IPv6
+
+IPv6 没有 NAT，家里每台设备都有自己的公网地址，而这些地址只有在局域网里才看得到。把 [LanHound](https://github.com/playwjj/lanhound) 设备表导出的 CSV（设备页的导出，即 `/api/devices.csv`）交给 WanHound，它会取出每台设备的公网 IPv6，**逐个**审计——仍然是单目标审计，不做网段扫描：
+
+```bash
+./wanhound scan-lanhound --csv lanhound-devices.csv --label home --dry-run   # 先列出目标
+./wanhound scan-lanhound --csv lanhound-devices.csv --label home --quick     # 确认后逐个审计
+```
+
+- 默认每台设备只取 LanHound 最近看到的那个公网 IPv6；`--all-addresses` 审计全部。私网（ULA）和链路本地地址会被跳过。
+- 每台设备有自己的历史标签（`home · 设备名`），所以每台设备都能单独对比变化。
+- 开始前会列出全部目标并要求确认（非交互运行需加 `--yes`）；目标数超过 `--max`（默认 32）会拒绝。
+- IPv6 隐私（临时）地址会轮换，较早看到的地址可能已失效。
 
 ### Web UI
 
@@ -164,12 +181,12 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/findings.jpg" alt="带证据、说明、建议和规则编号的结论卡片"><br><sub>每条结论：证据、这是什么、我该怎么办、规则编号和置信度。</sub></td>
-    <td width="50%"><img src="docs/images/compare.jpg" alt="两次快照并排对比"><br><sub>任意两次快照并排对比——新开端口标红，地址变化有提示。</sub></td>
+    <td width="50%"><img src="docs/images/findings.zh.jpg" alt="带证据、说明、建议和规则编号的结论卡片"><br><sub>每条结论：证据、这是什么、我该怎么办、规则编号和置信度。</sub></td>
+    <td width="50%"><img src="docs/images/compare.zh.jpg" alt="两次快照并排对比"><br><sub>任意两次快照并排对比——新开端口标红，地址变化有提示。</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/history.jpg" alt="按家庭标签的历史时间线"><br><sub>历史按家庭标签保存，而不是按 IP。</sub></td>
-    <td width="50%"><img src="docs/images/new-audit.jpg" alt="新建审计表单"><br><sub>新建审计：一个 IPv4 和/或一个 IPv6，必须明确勾选授权声明。</sub></td>
+    <td width="50%"><img src="docs/images/new-audit.zh.jpg" alt="新建审计表单"><br><sub>新建审计：一个 IPv4 和/或一个 IPv6，必须明确勾选授权声明。</sub></td>
   </tr>
 </table>
 
@@ -200,7 +217,8 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 
 - **P0 — 已完成**：双栈单目标审计与地址分类（拒绝 CGNAT/私网/保留地址）、全端口/快速/自定义端口集、自适应超时、三态引擎、banner 探测、结构化规则库、终端 + JSON 输出、退出码约定。
 - **P1 — 已完成**：TLS/HTTP 深度识别、组合规则、按标签的快照对比、扫描位置自检、UDP 小集，以及带进度、报告、历史时间线和并排对比的 Web UI 和全套访问控制。
-- **P2 — 部分完成**：独立 HTML 报告导出 ✔、Telegram 推送 ✔。待做：读取 LanHound 导出的地址清单（仍逐个审计——依然不做网段扫描）。
+- **P2 — 已完成**：独立 HTML 报告导出 ✔、Telegram 推送 ✔、读取 LanHound 导出的设备清单逐个审计 IPv6 ✔（仍是单目标审计，不做网段扫描）。
+- **v0.3** — 中文报告（终端、HTML、Web 界面、Telegram 摘要）。
 
 ## 已知局限
 
@@ -218,12 +236,12 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 make build     # ./wanhound（Go 1.25+，仅标准库）
 make test      # 单元 + 集成测试（引擎、规则、快照/对比、审计流程、Web 访问控制）
 make vet
-make testbed   # 在 Linux Docker 主机上运行验收靶机（见下）
+make testbed   # 在 Linux Docker 主机上运行验收靶机（见下；CI 每次提交都会跑）
 ```
 
 **测试靶机**：`scripts/testbed.sh <linux 二进制>` 会启动一个端口状态已知的容器——有监听（`open`）、TCP reset 拒绝和未使用端口（`closed`）、iptables `DROP` 和 ICMP 拒绝（`filtered`）、一个 UDP 开放解析器、一个被丢弃和一个关闭的 UDP 端口——用 `wanhound scan --lab` 审计它，逐项断言端口状态、规则命中和 UDP 结果；然后再打开一个端口，断言对比结果和退出码 1。防火墙规则只存在于容器自己的网络命名空间，宿主机防火墙不受影响。`--lab`（CLI 和 `serve` 均支持）正是为此允许私网/回环目标；CGNAT 和保留地址仍然拒绝。
 
-规则库位于 `internal/knowledge/rules.json`：修改时请更新 `version`；同一个 `group` 内，具体的证据规则要放在端口号兜底规则之前；然后运行 `make test`——加载器会拒绝重复编号、错误的正则和没有任何条件的规则。
+规则库位于 `internal/knowledge/rules.json`，中文文本在 `rules.zh.json`（按规则编号对应，测试会检查每条规则都有翻译）；界面和报告的其他文字在 `internal/i18n/catalog.go`。修改规则时请更新 `version`；同一个 `group` 内，具体的证据规则要放在端口号兜底规则之前；然后运行 `make test`——加载器会拒绝重复编号、错误的正则和没有任何条件的规则。
 
 ## 许可证
 

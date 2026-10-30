@@ -1,6 +1,7 @@
 // Package report renders audit results for humans: the terminal
 // report, a short text summary (for push notifications), and a
-// standalone HTML page. The exit-code contract lives in package audit.
+// standalone HTML page, in English or Simplified Chinese. The
+// exit-code contract lives in package audit.
 package report
 
 import (
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/playwjj/wanhound/internal/audit"
+	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/knowledge"
 	"github.com/playwjj/wanhound/internal/scan"
 	"github.com/playwjj/wanhound/internal/store"
@@ -36,139 +38,152 @@ func (p palette) risk(r knowledge.Risk) string {
 	return p.dim
 }
 
-// Print writes the full human-readable report.
-func Print(w io.Writer, rep *audit.Report, color bool) {
-	c := colors(color)
-	fmt.Fprintf(w, "%sWanHound audit — label %q%s\n", c.bold, rep.Label, c.reset)
+// printer carries the output language and colors.
+type printer struct {
+	w    io.Writer
+	c    palette
+	lang string
+}
+
+func (p printer) t(key string, args ...any) string { return i18n.T(p.lang, key, args...) }
+
+func (p printer) riskName(r knowledge.Risk) string { return p.t("risk." + r.String()) }
+
+// Print writes the full human-readable report in lang.
+func Print(w io.Writer, rep *audit.Report, color bool, lang string) {
+	p := printer{w: w, c: colors(color), lang: i18n.Normalize(lang)}
+	c := p.c
+	fmt.Fprintf(w, "%s%s%s\n", c.bold, p.t("r.title", rep.Label), c.reset)
 	for _, e := range rep.Errors {
-		fmt.Fprintf(w, "\n%sNot audited: %s%s\n  %s\n", c.yellow, e.IP, c.reset, e.Reason)
+		fmt.Fprintf(w, "\n%s%s%s\n  %s\n", c.yellow, p.t("r.not_audited", e.IP), c.reset, e.Reason.Render(p.lang))
 	}
 	for _, s := range rep.Targets {
-		printTarget(w, s, c)
+		p.target(s.Localized(p.lang))
 	}
-	fmt.Fprintf(w, "\n%s── Audit record ──%s\n", c.dim, c.reset)
-	fmt.Fprintf(w, "  time      %s (took %s)\n", rep.Started.Format("2006-01-02 15:04:05 MST"), rep.Duration.Round(time.Second))
+	fmt.Fprintf(w, "\n%s%s%s\n", c.dim, p.t("r.record"), c.reset)
+	fmt.Fprintln(w, p.t("r.rec_time", rep.Started.Format("2006-01-02 15:04:05 MST"), rep.Duration.Round(time.Second)))
 	for _, s := range rep.Targets {
 		src := s.Egress
 		if src == "" {
-			src = "not checked"
+			src = p.t("r.not_checked")
 			if rep.Offline {
-				src += " (offline)"
+				src += p.t("r.offline_suffix")
 			}
 		}
-		fmt.Fprintf(w, "  target    %s (IP%s) · source %s · %s ports %s · snapshot %s\n", s.IP, s.Family, src, s.PortSet, shortSpec(s.Scanned), s.ID)
+		fmt.Fprintln(w, p.t("r.rec_target", s.IP, s.Family, src, p.t("portset."+s.PortSet), shortSpec(s.Scanned, p.lang), s.ID))
 	}
-	fmt.Fprintf(w, "  rules     %s\n", rep.RulesVersion)
-	fmt.Fprintln(w, "  Only audit addresses you own or are authorized to test.")
+	fmt.Fprintln(w, p.t("r.rec_rules", rep.RulesVersion))
+	fmt.Fprintln(w, p.t("r.footer"))
 }
 
-func printTarget(w io.Writer, s *store.Snapshot, c palette) {
+func (p printer) target(s *store.Snapshot) {
+	w, c := p.w, p.c
 	fmt.Fprintf(w, "\n%s━━ %s (IP%s) ━━%s\n", c.bold, s.IP, s.Family, c.reset)
-	if p := s.Intel; p != nil {
+	if pr := s.Intel; pr != nil {
 		var parts []string
-		if p.ASN != "" || p.Org != "" {
-			parts = append(parts, strings.TrimSpace(p.ASN+" "+p.Org))
+		if pr.ASN != "" || pr.Org != "" {
+			parts = append(parts, strings.TrimSpace(pr.ASN+" "+pr.Org))
 		}
-		if p.Country != "" {
-			parts = append(parts, p.Country)
+		if pr.Country != "" {
+			parts = append(parts, pr.Country)
 		}
-		if len(p.PTR) > 0 {
-			parts = append(parts, "ptr "+strings.Join(p.PTR, ", "))
+		if len(pr.PTR) > 0 {
+			parts = append(parts, p.t("r.ptr", strings.Join(pr.PTR, ", ")))
 		}
 		if len(parts) > 0 {
-			fmt.Fprintf(w, "%s%s  (via %s — the address was shown to that service)%s\n", c.dim, strings.Join(parts, " · "), p.Source, c.reset)
+			fmt.Fprintf(w, "%s%s  %s%s\n", c.dim, strings.Join(parts, " · "), p.t("r.via", pr.Source), c.reset)
 		}
-		for _, h := range p.Hints {
-			fmt.Fprintf(w, "%s! %s%s\n", c.yellow, h, c.reset)
+		for _, h := range pr.Hints {
+			fmt.Fprintf(w, "%s! %s%s\n", c.yellow, h.Render(p.lang), c.reset)
 		}
 	}
-	rtt := "no answer to calibration"
+	rtt := p.t("r.rtt_none")
 	if s.RTT > 0 {
-		rtt = "rtt " + s.RTT.Round(time.Millisecond).String()
+		rtt = p.t("r.rtt", roundRTT(s.RTT))
 	}
-	fmt.Fprintf(w, "Scanned %d TCP ports in %s (timeout %s, %s): %s%d open%s · %d closed · %d filtered\n",
-		s.Counts.Open+s.Counts.Closed+s.Counts.Filtered, s.Duration.Round(100*time.Millisecond),
-		s.Timeout.Round(time.Millisecond), rtt, c.bold, s.Counts.Open, c.reset, s.Counts.Closed, s.Counts.Filtered)
+	total := s.Counts.Open + s.Counts.Closed + s.Counts.Filtered
+	fmt.Fprintln(w, p.t("r.scanned", total, s.Duration.Round(100*time.Millisecond), s.Timeout.Round(time.Millisecond), rtt,
+		c.bold+p.t("r.open_n", s.Counts.Open)+c.reset, s.Counts.Closed, s.Counts.Filtered))
 
-	printChanges(w, s.Changes, c)
+	p.changes(s.Changes)
 
 	byPort := findingsByPort(s.Findings)
 	if len(s.Open) > 0 {
-		fmt.Fprintf(w, "\n  %-10s %-26s %-7s %s\n", "PORT", "SERVICE", "RISK", "FINDING")
+		fmt.Fprintf(w, "\n  %s %s %s %s\n", pad(p.t("r.col_port"), 10), pad(p.t("r.col_service"), 26), pad(p.t("r.col_risk"), 7), p.t("r.col_finding"))
 		for _, o := range s.Open {
-			fs := byPort[o.Port]
-			top := fs[0]
-			fmt.Fprintf(w, "  %-10s %-26s %s%-7s%s %s\n", fmt.Sprintf("%d/tcp", o.Port), trunc(top.Service, 26),
-				c.risk(top.Risk), strings.ToUpper(top.Risk.String()), c.reset, top.Title)
+			top := byPort[o.Port][0]
+			fmt.Fprintf(w, "  %s %s %s%s%s %s\n", pad(fmt.Sprintf("%d/tcp", o.Port), 10), pad(trunc(top.Service, 26), 26),
+				c.risk(top.Risk), pad(strings.ToUpper(p.riskName(top.Risk)), 7), c.reset, top.Title)
 		}
 	}
 	if len(s.UDP) > 0 {
 		var parts []string
 		for _, u := range s.UDP {
-			parts = append(parts, fmt.Sprintf("%d %s", u.Port, u.State))
+			parts = append(parts, fmt.Sprintf("%d %s", u.Port, p.t("udp."+u.State.String())))
 		}
-		fmt.Fprintf(w, "\n  UDP (advisory: silence cannot tell open from filtered): %s\n", strings.Join(parts, " · "))
+		fmt.Fprintf(w, "\n  %s\n", p.t("r.udp_line", strings.Join(parts, " · ")))
 	}
 
 	if len(s.Findings) == 0 {
-		fmt.Fprintf(w, "\n%sNothing answered. From this vantage point, nothing is exposed.%s\n", c.green, c.reset)
+		fmt.Fprintf(w, "\n%s%s%s\n", c.green, p.t("r.nothing"), c.reset)
 	} else {
-		fmt.Fprintf(w, "\nFindings (worst first):\n")
+		fmt.Fprintf(w, "\n%s\n", p.t("r.findings"))
 		for _, f := range s.Findings {
-			where := "whole target"
+			where := p.t("whole")
 			if f.Port != 0 {
 				where = fmt.Sprintf("%d/%s", f.Port, f.Proto)
 			}
-			fmt.Fprintf(w, "\n%s[%s]%s %s  %s%s%s  %s(%s", c.risk(f.Risk), strings.ToUpper(f.Risk.String()), c.reset,
+			fmt.Fprintf(w, "\n%s[%s]%s %s  %s%s%s  %s(%s", c.risk(f.Risk), strings.ToUpper(p.riskName(f.Risk)), c.reset,
 				where, c.bold, f.Title, c.reset, c.dim, f.RuleID)
 			if f.Confidence != "" {
-				fmt.Fprintf(w, ", confidence %s", confidenceText(f.Confidence))
+				fmt.Fprint(w, p.t("r.confidence", p.t("conf."+f.Confidence)))
 			}
 			fmt.Fprintf(w, ")%s\n", c.reset)
 			if f.Evidence != "" {
-				fmt.Fprintf(w, "    evidence  %s\n", f.Evidence)
+				fmt.Fprintf(w, "    %s  %s\n", pad(p.t("r.evidence"), 8), f.Evidence)
 			}
-			fmt.Fprintf(w, "    what      %s\n", f.Explain)
-			fmt.Fprintf(w, "    do        %s\n", f.Advice)
+			fmt.Fprintf(w, "    %s  %s\n", pad(p.t("r.what"), 8), f.Explain)
+			fmt.Fprintf(w, "    %s  %s\n", pad(p.t("r.do"), 8), f.Advice)
 		}
 	}
 	if len(s.Notes) > 0 {
-		fmt.Fprintln(w, "\nNotes:")
+		fmt.Fprintf(w, "\n%s\n", p.t("r.notes"))
 		for _, n := range s.Notes {
-			fmt.Fprintf(w, "  - %s\n", n)
+			fmt.Fprintf(w, "  - %s\n", n.Render(p.lang))
 		}
 	}
 }
 
-func printChanges(w io.Writer, ch *store.Changes, c palette) {
+func (p printer) changes(ch *store.Changes) {
+	w, c := p.w, p.c
 	if ch == nil {
-		fmt.Fprintln(w, "No previous snapshot for this label and address family: this run is the baseline.")
+		fmt.Fprintln(w, p.t("r.baseline"))
 		return
 	}
-	fmt.Fprintf(w, "Compared with %s (%s):\n", ch.PrevTime.Local().Format("2006-01-02 15:04"), ch.PrevIP)
+	fmt.Fprintln(w, p.t("r.compared", ch.PrevTime.Local().Format("2006-01-02 15:04"), ch.PrevIP))
 	if ch.IPChanged {
-		fmt.Fprintf(w, "  %s! address changed %s → this run; it may not be the same line, compare with care%s\n", c.yellow, ch.PrevIP, c.reset)
+		fmt.Fprintf(w, "  %s%s%s\n", c.yellow, p.t("r.ip_changed", ch.PrevIP), c.reset)
 	}
 	if len(ch.Opened) > 0 {
-		fmt.Fprintf(w, "  %sNEW open TCP ports: %s%s\n", c.red+c.bold, JoinInts(ch.Opened), c.reset)
+		fmt.Fprintf(w, "  %s%s%s\n", c.red+c.bold, p.t("r.new_tcp", JoinInts(ch.Opened)), c.reset)
 	}
 	if len(ch.UDPOpened) > 0 {
-		fmt.Fprintf(w, "  %sNEW answering UDP ports: %s%s\n", c.red+c.bold, JoinInts(ch.UDPOpened), c.reset)
+		fmt.Fprintf(w, "  %s%s%s\n", c.red+c.bold, p.t("r.new_udp", JoinInts(ch.UDPOpened)), c.reset)
 	}
 	if len(ch.Closed) > 0 {
-		fmt.Fprintf(w, "  %sno longer open: %s%s\n", c.green, JoinInts(ch.Closed), c.reset)
+		fmt.Fprintf(w, "  %s%s%s\n", c.green, p.t("r.closed", JoinInts(ch.Closed)), c.reset)
 	}
 	if len(ch.UDPClosed) > 0 {
-		fmt.Fprintf(w, "  %sUDP no longer answering: %s%s\n", c.green, JoinInts(ch.UDPClosed), c.reset)
+		fmt.Fprintf(w, "  %s%s%s\n", c.green, p.t("r.udp_closed", JoinInts(ch.UDPClosed)), c.reset)
 	}
 	for _, sc := range ch.Changed {
-		fmt.Fprintf(w, "  %d/tcp now answers differently:\n      before %s\n      after  %s\n", sc.Port, sc.Before, sc.After)
+		fmt.Fprintf(w, "  %s\n      %s %s\n      %s %s\n", p.t("r.changed", sc.Port), p.t("r.before"), sc.Before, p.t("r.after"), sc.After)
 	}
 	if ch.Empty() {
-		fmt.Fprintln(w, "  no change in open ports")
+		fmt.Fprintf(w, "  %s\n", p.t("r.no_change"))
 	}
-	if ch.Coverage != "" {
-		fmt.Fprintf(w, "  %snote: %s%s\n", c.dim, ch.Coverage, c.reset)
+	if ch.Coverage != nil {
+		fmt.Fprintf(w, "  %s%s%s\n", c.dim, p.t("r.note", ch.Coverage.Render(p.lang)), c.reset)
 	}
 }
 
@@ -182,36 +197,27 @@ func findingsByPort(fs []knowledge.Finding) map[int][]knowledge.Finding {
 	return m
 }
 
-func confidenceText(c string) string {
-	switch c {
-	case "high":
-		return "high — matched identifying evidence"
-	case "medium":
-		return "medium — protocol recognized"
-	default:
-		return "low — port number only"
-	}
-}
-
 // Summary is a short plain-text digest (for chat notifications).
-func Summary(rep *audit.Report) string {
+func Summary(rep *audit.Report, lang string) string {
+	t := func(key string, args ...any) string { return i18n.T(lang, key, args...) }
 	var b strings.Builder
-	fmt.Fprintf(&b, "WanHound — %s\n", rep.Label)
+	b.WriteString(t("s.title", rep.Label) + "\n")
 	for _, s := range rep.Targets {
-		fmt.Fprintf(&b, "%s: %d open", s.IP, s.Counts.Open)
+		s = s.Localized(lang)
+		b.WriteString(t("s.line", s.IP, s.Counts.Open))
 		if len(s.Findings) > 0 {
-			fmt.Fprintf(&b, ", worst %s", knowledge.MaxRisk(s.Findings))
+			b.WriteString(t("s.worst", t("risk."+knowledge.MaxRisk(s.Findings).String())))
 		}
 		b.WriteString("\n")
 		if ch := s.Changes; ch != nil {
 			if ch.IPChanged {
-				fmt.Fprintf(&b, "  address changed from %s\n", ch.PrevIP)
+				b.WriteString(t("s.addr", ch.PrevIP) + "\n")
 			}
 			if len(ch.Opened) > 0 {
-				fmt.Fprintf(&b, "  NEW open: %s\n", JoinInts(ch.Opened))
+				b.WriteString(t("s.new", JoinInts(ch.Opened)) + "\n")
 			}
 			if len(ch.Closed) > 0 {
-				fmt.Fprintf(&b, "  closed: %s\n", JoinInts(ch.Closed))
+				b.WriteString(t("s.closed", JoinInts(ch.Closed)) + "\n")
 			}
 		}
 		for _, f := range s.Findings {
@@ -220,12 +226,12 @@ func Summary(rep *audit.Report) string {
 				if f.Port != 0 {
 					port = fmt.Sprintf("%d/%s", f.Port, f.Proto)
 				}
-				fmt.Fprintf(&b, "  [HIGH] %s %s\n", port, f.Title)
+				fmt.Fprintf(&b, "  [%s] %s %s\n", strings.ToUpper(t("risk.high")), port, f.Title)
 			}
 		}
 	}
 	for _, e := range rep.Errors {
-		fmt.Fprintf(&b, "%s: not audited\n", e.IP)
+		b.WriteString(t("s.not_audited", e.IP) + "\n")
 	}
 	return b.String()
 }
@@ -239,20 +245,58 @@ func JoinInts(xs []int) string {
 	return strings.Join(parts, ", ")
 }
 
-func shortSpec(s string) string {
+func shortSpec(s, lang string) string {
 	if len(s) > 40 {
 		ports, err := scan.ParsePorts(s)
 		if err == nil {
-			return fmt.Sprintf("(%d ports)", len(ports))
+			return i18n.T(lang, "r.ports_count", len(ports))
 		}
 		return s[:40] + "…"
 	}
 	return s
 }
 
-func trunc(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n-1]) + "…"
+func roundRTT(d time.Duration) string {
+	if d < time.Millisecond {
+		return "<1ms"
+	}
+	return d.Round(time.Millisecond).String()
+}
+
+// width approximates terminal columns: CJK characters take two.
+func width(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x1100 && (r <= 0x115f || r >= 0x2e80 && r <= 0xa4cf || r >= 0xac00 && r <= 0xd7a3 || r >= 0xf900 && r <= 0xfaff || r >= 0xfe30 && r <= 0xfe4f || r >= 0xff00 && r <= 0xff60 || r >= 0xffe0 && r <= 0xffe6) {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+// pad right-pads s to n terminal columns.
+func pad(s string, n int) string {
+	if w := width(s); w < n {
+		return s + strings.Repeat(" ", n-w)
 	}
 	return s
+}
+
+func trunc(s string, n int) string {
+	if width(s) <= n {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := width(string(r))
+		if w+rw > n-1 {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "…"
 }

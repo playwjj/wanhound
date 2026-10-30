@@ -50,7 +50,7 @@ func TestScannable(t *testing.T) {
 		t.Error("public addresses must be scannable")
 	}
 	for _, c := range []Class{ClassPrivate, ClassCGNAT, ClassLoopback, ClassLinkLocal, ClassULA, ClassUnspecified, ClassReserved} {
-		if ok, why := Scannable(c); ok || why == "" {
+		if ok, why := Scannable(c); ok || why.Key == "" || why.String() == why.Key {
 			t.Errorf("Scannable(%v) = %v, want false with explanation", c, ok)
 		}
 	}

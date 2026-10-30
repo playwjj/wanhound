@@ -8,6 +8,113 @@ let session = null;
 let pollTimer = null;
 let lastScanBody = null;
 
+// ---- i18n --------------------------------------------------------------
+
+const L = {
+  en: {
+    signin: "Sign in", signin_note: "This WanHound server is password-protected. Every audit is logged.", password: "Password",
+    nav_new: "New audit", nav_task: "Current", nav_history: "History", nav_log: "Audit log", logout: "Log out",
+    footer: "Self-audit of your own home network's public exposure. Only audit addresses you own or are authorized to test.",
+    ph_v4: "your router's WAN IPv4", ph_v6: "a device's global IPv6",
+    start: "Start audit", need_addr: "Enter at least one address.", need_auth: "Confirm that you own or are authorized to test these addresses.",
+    new_title: "New audit", new_intro: "Audit one public IPv4 and/or one IPv6 address of your own home, from this server's vantage point. Run WanHound outside the network being audited.",
+    label_lbl: "Home label (history is kept per label, not per IP)", v4_lbl: "Public IPv4", v6_lbl: "Public IPv6", ports: "Ports",
+    ps_full: "All 65,535 ports (recommended, 1–3 min)", ps_quick: "Quick set ({0} common ports, seconds)", ps_custom: "Custom:",
+    udp_opt: "Also probe the home UDP set ({0}) — advisory only",
+    offline_opt: "Offline: no third-party lookups (ASN/ISP profile and egress self-check send the address to public lookup services)",
+    auth_b: "I own these addresses or am authorized to test them.", auth_rest: " The audit, its targets and your address are recorded in the audit log.",
+    running: "An audit is running ({0}). ", watch: "Watch progress", lab: "Lab mode: private and loopback targets are allowed on this server (test bench).",
+    no_audit: "No audit yet", start_one: "Start one", auditing: "Auditing…", st_done: "Audit done", st_failed: "Audit failed", st_cancelled: "Audit cancelled",
+    task_meta: "label \"{0}\" · {1} · {2} scan · started {3}", cancel: "Cancel",
+    stg_check: "checking vantage point", stg_profile: "profiling address", stg_tcp: "TCP connect scan", stg_probe: "identifying services", stg_udp: "UDP probes", stg_start: "starting",
+    not_audited: "Not audited: {0}", continue_anyway: "Continue anyway (results will be distorted)",
+    via: " (via {0})", ptr: "ptr {0}",
+    open: "open", closed: "closed", filtered: "filtered", scan_kind: "{0} scan", timeout: "timeout", timeout_rtt: "timeout (rtt {0})",
+    open_tcp: "Open TCP ports", col_port: "Port", col_risk: "Risk", col_service: "Service", col_answered: "What answered",
+    udp_note: "(advisory: silence cannot tell open from filtered)", findings: "Findings", nothing: "Nothing answered. From this vantage point, nothing is exposed.",
+    evidence: "Evidence", what: "What is this", todo: "What to do", rule: "Rule", confidence: " · confidence {0}",
+    conf_high: "high — matched identifying evidence", conf_medium: "medium — protocol recognized", conf_low: "low — port number only",
+    footer_rec: "Audited {0} · source {1} · rules {2} · snapshot {3} · ", not_checked: "not checked", dl_html: "Download HTML report", history: "History",
+    baseline: "First audit for this label and address family — this is the baseline.", compared: "Compared with {0} ({1}):",
+    addr_changed: "Address changed: {0} → this run. It may not be the same line; compare with care.",
+    new_tcp: "NEW open TCP ports: {0}", new_udp: "NEW answering UDP ports: {0}", gone: "No longer open: {0}", udp_gone: "UDP no longer answering: {0}",
+    answers_diff: "{0}/tcp answers differently: ", no_change: "No change in open ports.",
+    no_audits: "No audits yet. ", n_open: "{0} open", n_snaps: "{0} snapshot(s)", last: " · last {0}",
+    compare_sel: "Compare selected", compare_hint: "Select two snapshots of the same address family to compare side by side.",
+    hist_title: "History — {0}", addr_event: "Address changed: {0}", new_short: "New: {0}", closed_short: "Closed: {0}", back: "← History — {0}",
+    compare: "Compare", not_scanned: "not scanned in this run", not_open: "not open", no_ports: "No open ports in either snapshot.",
+    log_title: "Audit log", log_note: "Every login and audit on this server, newest first (audit.log in the data directory).",
+    col_time: "Time", col_action: "Action", col_from: "From", col_details: "Details", unreachable: "Cannot reach the server: {0}",
+    risk_high: "HIGH", risk_medium: "MEDIUM", risk_low: "LOW", risk_info: "INFO", risk_none: "CLEAN",
+    ps_name_full: "full", ps_name_quick: "quick", ps_name_custom: "custom", whole: "whole target",
+    "udp_open": "open", "udp_closed": "closed", "udp_open|filtered": "open|filtered",
+    https_only: " (HTTPS-only port: plaintext request rejected)", self_signed: " self-signed", expired: " EXPIRED", lang_switch: "中文",
+  },
+  zh: {
+    signin: "登录", signin_note: "这台 WanHound 服务器受口令保护，每次审计都会被记录。", password: "口令",
+    nav_new: "新建审计", nav_task: "当前任务", nav_history: "历史", nav_log: "审计日志", logout: "退出",
+    footer: "对你自家网络公网暴露面的自查。只审计你拥有或已获授权测试的地址。",
+    ph_v4: "路由器 WAN 口的 IPv4", ph_v6: "设备的公网 IPv6",
+    start: "开始审计", need_addr: "请至少填写一个地址。", need_auth: "请确认你拥有这些地址或已获授权测试。",
+    new_title: "新建审计", new_intro: "从这台服务器的视角，审计你家的一个公网 IPv4 和/或一个 IPv6 地址。请在被审计网络之外运行 WanHound。",
+    label_lbl: "家庭标签（历史按标签保存，而不是按 IP）", v4_lbl: "公网 IPv4", v6_lbl: "公网 IPv6", ports: "端口",
+    ps_full: "全部 65535 个端口（推荐，1–3 分钟）", ps_quick: "快速集（{0} 个常用端口，几秒钟）", ps_custom: "自定义：",
+    udp_opt: "同时探测家庭常用 UDP 端口（{0}）——仅供参考",
+    offline_opt: "离线：不做任何第三方查询（ASN/运营商画像和出口自检会把地址发送给公共查询服务）",
+    auth_b: "我拥有这些地址，或已获授权测试。", auth_rest: "本次审计、目标地址和你的访问地址都会记入审计日志。",
+    running: "有审计正在进行（{0}）。", watch: "查看进度", lab: "实验模式：这台服务器允许私网和回环目标（测试靶机）。",
+    no_audit: "还没有审计", start_one: "开始一次", auditing: "审计中…", st_done: "审计完成", st_failed: "审计失败", st_cancelled: "审计已取消",
+    task_meta: "标签「{0}」· {1} · {2}扫描 · 开始于 {3}", cancel: "取消",
+    stg_check: "检查扫描位置", stg_profile: "查询地址画像", stg_tcp: "TCP 连接扫描", stg_probe: "识别服务", stg_udp: "UDP 探测", stg_start: "启动中",
+    not_audited: "未审计：{0}", continue_anyway: "仍然继续（结果会失真）",
+    via: "（经由 {0}）", ptr: "反向解析 {0}",
+    open: "开放", closed: "关闭", filtered: "被过滤", scan_kind: "{0}扫描", timeout: "超时", timeout_rtt: "超时（RTT {0}）",
+    open_tcp: "开放的 TCP 端口", col_port: "端口", col_risk: "风险", col_service: "服务", col_answered: "应答内容",
+    udp_note: "（仅供参考：没有应答无法区分开放与被过滤）", findings: "结论", nothing: "没有任何端口应答。从这个扫描点看，没有暴露面。",
+    evidence: "证据", what: "这是什么", todo: "怎么办", rule: "规则", confidence: " · 置信度{0}",
+    conf_high: "高（匹配到识别性证据）", conf_medium: "中（识别出协议）", conf_low: "低（仅凭端口号）",
+    footer_rec: "审计于 {0} · 扫描源 {1} · 规则库 {2} · 快照 {3} · ", not_checked: "未检查", dl_html: "下载 HTML 报告", history: "历史",
+    baseline: "这是该标签和地址族的第一次审计——作为基线。", compared: "与 {0}（{1}）相比：",
+    addr_changed: "地址已变化：{0} → 本次。可能已不是同一条线路，对比请谨慎。",
+    new_tcp: "新开放的 TCP 端口：{0}", new_udp: "新应答的 UDP 端口：{0}", gone: "已不再开放：{0}", udp_gone: "UDP 已不再应答：{0}",
+    answers_diff: "{0}/tcp 的应答发生变化：", no_change: "开放端口没有变化。",
+    no_audits: "还没有审计。", n_open: "{0} 个开放", n_snaps: "{0} 个快照", last: " · 最近 {0}",
+    compare_sel: "对比所选", compare_hint: "选择同一地址族的两个快照进行并排对比。",
+    hist_title: "历史 — {0}", addr_event: "地址变化：{0}", new_short: "新开放：{0}", closed_short: "已关闭：{0}", back: "← 历史 — {0}",
+    compare: "对比", not_scanned: "本次未扫描该端口", not_open: "未开放", no_ports: "两个快照都没有开放端口。",
+    log_title: "审计日志", log_note: "这台服务器上的所有登录和审计，按时间倒序（数据目录下的 audit.log）。",
+    col_time: "时间", col_action: "动作", col_from: "来源", col_details: "详情", unreachable: "无法连接服务器：{0}",
+    risk_high: "高危", risk_medium: "中危", risk_low: "低危", risk_info: "提示", risk_none: "无风险",
+    ps_name_full: "全端口", ps_name_quick: "快速", ps_name_custom: "自定义", whole: "整体",
+    "udp_open": "开放", "udp_closed": "关闭", "udp_open|filtered": "开放或被过滤",
+    https_only: "（仅 HTTPS：明文请求被拒绝）", self_signed: " 自签名", expired: " 已过期", lang_switch: "EN",
+  },
+};
+
+function storedLang() {
+  try { return localStorage.getItem("wanhound_lang"); } catch (_) { return null; }
+}
+let lang = storedLang() || ((navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en");
+
+// tr looks up a UI string and fills {0}, {1}… placeholders.
+function tr(key, ...args) {
+  const s = (L[lang] && L[lang][key]) || L.en[key] || key;
+  return s.replace(/\{(\d)\}/g, (_, i) => String(args[+i]));
+}
+const txt = (m) => (m && typeof m === "object" ? m.text : m) || "";
+
+function applyStatic() {
+  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+  document.querySelectorAll("[data-i18n]").forEach((n) => { n.textContent = tr(n.dataset.i18n); });
+}
+
+document.getElementById("lang").addEventListener("click", () => {
+  lang = lang === "zh" ? "en" : "zh";
+  try { localStorage.setItem("wanhound_lang", lang); } catch (_) { /* private mode */ }
+  applyStatic();
+  if (session) route(); else showLogin();
+});
+
 // ---- helpers ---------------------------------------------------------
 
 function el(tag, attrs, ...kids) {
@@ -52,10 +159,9 @@ const dur = (ns) => {
   return s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s";
 };
 const riskOrder = { high: 3, medium: 2, low: 1, info: 0 };
-const badge = (r) => el("span", { class: "badge " + r }, r === "none" ? "CLEAN" : r.toUpperCase());
+const badge = (r) => el("span", { class: "badge " + r }, tr("risk_" + r));
 const maxRisk = (fs) => (fs && fs.length ? fs.reduce((m, f) => (riskOrder[f.risk] > riskOrder[m] ? f.risk : m), "info") : "none");
-const where = (f) => (f.port ? f.port + "/" + f.proto : "whole target");
-const confText = { high: "high — matched identifying evidence", medium: "medium — protocol recognized", low: "low — port number only" };
+const where = (f) => (f.port ? f.port + "/" + f.proto : tr("whole"));
 
 function evidenceOf(info) {
   const parts = [];
@@ -63,15 +169,15 @@ function evidenceOf(info) {
   if (info.tls) {
     let s = "TLS" + (info.tls.cn ? " cn=" + JSON.stringify(info.tls.cn) : "");
     if (info.tls.issuer && info.tls.issuer !== info.tls.cn) s += " issuer=" + JSON.stringify(info.tls.issuer);
-    if (info.tls.self_signed) s += " self-signed";
-    if (info.tls.expired) s += " EXPIRED";
+    if (info.tls.self_signed) s += tr("self_signed");
+    if (info.tls.expired) s += tr("expired");
     parts.push(s);
   }
   if (info.http) {
     let s = "HTTP " + info.http.status;
     if (info.http.title) s += " title=" + JSON.stringify(info.http.title);
     if (info.http.server) s += " server=" + JSON.stringify(info.http.server);
-    if (info.http.https_only) s += " (HTTPS-only port: plaintext request rejected)";
+    if (info.http.https_only) s += tr("https_only");
     parts.push(s);
   }
   return parts.join("; ");
@@ -109,10 +215,10 @@ function showLogin(message) {
       pw.select();
     }
   } },
-    el("h1", {}, "Sign in"),
-    el("p", { class: "muted small" }, "This WanHound server is password-protected. Every audit is logged."),
-    el("label", { class: "f", for: "pw" }, "Password"), pw, msg);
-  const btn = el("button", { class: "primary", type: "submit", style: "margin-top:12px" }, "Sign in");
+    el("h1", {}, tr("signin")),
+    el("p", { class: "muted small" }, tr("signin_note")),
+    el("label", { class: "f", for: "pw" }, tr("password")), pw, msg);
+  const btn = el("button", { class: "primary", type: "submit", style: "margin-top:12px" }, tr("signin"));
   form.append(btn);
   setView(form);
   pw.focus();
@@ -136,8 +242,8 @@ async function viewNew() {
   const lastLabel = labels[0] ? labels[0].label : "home";
   const f = {
     label: el("input", { type: "text", id: "label", list: "labels", value: lastLabel, maxlength: 64, required: true }),
-    ipv4: el("input", { type: "text", id: "ipv4", placeholder: "e.g. 203.0.113.7", inputmode: "decimal", autocomplete: "off" }),
-    ipv6: el("input", { type: "text", id: "ipv6", placeholder: "e.g. 2001:db8::7", autocomplete: "off" }),
+    ipv4: el("input", { type: "text", id: "ipv4", placeholder: tr("ph_v4"), inputmode: "decimal", autocomplete: "off" }),
+    ipv6: el("input", { type: "text", id: "ipv6", placeholder: tr("ph_v6"), autocomplete: "off" }),
     ports: el("input", { type: "text", id: "ports", placeholder: "22,80,8000-8100", disabled: true }),
     udp: el("input", { type: "checkbox", id: "udp", checked: true }),
     offline: el("input", { type: "checkbox", id: "offline" }),
@@ -150,7 +256,7 @@ async function viewNew() {
   const radio = (v, text, checked) => el("label", { class: "check" },
     el("input", { type: "radio", name: "portset", value: v, checked, onchange: () => { f.ports.disabled = v !== "custom"; } }), text);
   const msg = el("div");
-  const submit = el("button", { class: "primary", type: "submit" }, "Start audit");
+  const submit = el("button", { class: "primary", type: "submit" }, tr("start"));
 
   const form = el("form", { class: "card", onsubmit: async (e) => {
     e.preventDefault();
@@ -158,10 +264,10 @@ async function viewNew() {
     const body = {
       label: f.label.value.trim(), ipv4: f.ipv4.value.trim(), ipv6: f.ipv6.value.trim(),
       port_set: form.querySelector("input[name=portset]:checked").value, ports: f.ports.value.trim(),
-      udp: f.udp.checked, offline: f.offline.checked, authorized: f.authorized.checked, accept_inside: false,
+      udp: f.udp.checked, offline: f.offline.checked, authorized: f.authorized.checked, accept_inside: false, lang,
     };
-    if (!body.ipv4 && !body.ipv6) { msg.append(errorBox("Enter at least one address.")); return; }
-    if (!body.authorized) { msg.append(errorBox("Confirm that you own or are authorized to test these addresses.")); return; }
+    if (!body.ipv4 && !body.ipv6) { msg.append(errorBox(tr("need_addr"))); return; }
+    if (!body.authorized) { msg.append(errorBox(tr("need_auth"))); return; }
     submit.disabled = true;
     try {
       await api("POST", "/api/scan", body);
@@ -172,30 +278,30 @@ async function viewNew() {
       submit.disabled = false;
     }
   } },
-    el("h1", {}, "New audit"),
-    el("p", { class: "muted small" }, "Audit one public IPv4 and/or one IPv6 address of your own home, from this server's vantage point. Run WanHound outside the network being audited."),
+    el("h1", {}, tr("new_title")),
+    el("p", { class: "muted small" }, tr("new_intro")),
     el("datalist", { id: "labels" }, labels.map((l) => el("option", { value: l.label }))),
     el("div", { class: "grid2" },
-      el("div", {}, el("label", { class: "f", for: "label" }, "Home label (history is kept per label, not per IP)"), f.label),
+      el("div", {}, el("label", { class: "f", for: "label" }, tr("label_lbl")), f.label),
       el("div"),
-      el("div", {}, el("label", { class: "f", for: "ipv4" }, "Public IPv4"), f.ipv4),
-      el("div", {}, el("label", { class: "f", for: "ipv6" }, "Public IPv6"), f.ipv6)),
-    el("h3", {}, "Ports"),
+      el("div", {}, el("label", { class: "f", for: "ipv4" }, tr("v4_lbl")), f.ipv4),
+      el("div", {}, el("label", { class: "f", for: "ipv6" }, tr("v6_lbl")), f.ipv6)),
+    el("h3", {}, tr("ports")),
     el("div", { class: "opts" },
-      radio("full", "All 65,535 ports (recommended, 1–3 min)", true),
-      radio("quick", `Quick set (${session.quick_ports} common ports, seconds)`, false),
-      radio("custom", "Custom:", false), f.ports),
-    el("label", { class: "check" }, f.udp, el("span", {}, `Also probe the home UDP set (${(session.udp_ports || []).join(", ")}) — advisory only`)),
-    el("label", { class: "check" }, f.offline, el("span", {}, "Offline: no third-party lookups (ASN/ISP profile and egress self-check send the address to public lookup services)")),
-    el("label", { class: "check" }, f.authorized, el("span", {}, el("b", {}, "I own these addresses or am authorized to test them."), " The audit, its targets and your address are recorded in the audit log.")),
+      radio("full", tr("ps_full"), true),
+      radio("quick", tr("ps_quick", session.quick_ports), false),
+      radio("custom", tr("ps_custom"), false), f.ports),
+    el("label", { class: "check" }, f.udp, el("span", {}, tr("udp_opt", (session.udp_ports || []).join(", ")))),
+    el("label", { class: "check" }, f.offline, el("span", {}, tr("offline_opt"))),
+    el("label", { class: "check" }, f.authorized, el("span", {}, el("b", {}, tr("auth_b")), tr("auth_rest"))),
     msg, submit);
 
   const nodes = [];
   if (task && task.state === "running") {
-    nodes.push(el("div", { class: "warn" }, "An audit is running (", task.targets.join(", "), "). ", el("a", { href: "#/task" }, "Watch progress")));
+    nodes.push(el("div", { class: "warn" }, tr("running", task.targets.join(", ")), el("a", { href: "#/task" }, tr("watch"))));
     submit.disabled = true;
   }
-  if (session.lab) nodes.push(el("div", { class: "warn" }, "Lab mode: private and loopback targets are allowed on this server (test bench)."));
+  if (session.lab) nodes.push(el("div", { class: "warn" }, tr("lab")));
   setView(...nodes, form);
 }
 
@@ -209,15 +315,15 @@ function stopPolling() {
 async function viewTask() {
   stopPolling();
   let task;
-  try { task = (await api("GET", "/api/task")).task; } catch (_) { return; }
+  try { task = (await api("GET", "/api/task?" + q({ lang }))).task; } catch (_) { return; }
   if (location.hash !== "#/task") return;
   if (!task) {
-    setView(el("div", { class: "card" }, el("h1", {}, "No audit yet"), el("p", {}, el("a", { href: "#/" }, "Start one"))));
+    setView(el("div", { class: "card" }, el("h1", {}, tr("no_audit")), el("p", {}, el("a", { href: "#/" }, tr("start_one")))));
     return;
   }
   const head = el("div", { class: "card" },
-    el("h1", {}, task.state === "running" ? "Auditing…" : "Audit " + task.state),
-    el("p", { class: "muted small" }, `label "${task.label}" · ${task.targets.join(" + ")} · ${task.port_set} scan · started ${fmtTime(task.started)}`));
+    el("h1", {}, task.state === "running" ? tr("auditing") : tr("st_" + task.state)),
+    el("p", { class: "muted small" }, tr("task_meta", task.label, task.targets.join(" + "), tr("ps_name_" + task.port_set), fmtTime(task.started))));
   if (task.state === "running") {
     const c = task.current || {};
     const pct = c.stage === "tcp" && c.total ? Math.floor((c.done || 0) * 100 / c.total) : null;
@@ -227,7 +333,7 @@ async function viewTask() {
     head.append(el("button", { class: "danger", type: "button", onclick: async (e) => {
       e.target.disabled = true;
       try { await api("POST", "/api/task/cancel"); } catch (err) { head.append(errorBox(err.message)); }
-    } }, "Cancel"));
+    } }, tr("cancel")));
   }
   if (task.log && task.log.length) head.append(el("ul", { class: "log" }, task.log.map((l) => el("li", {}, l))));
   if (task.error) head.append(errorBox(task.error));
@@ -238,21 +344,21 @@ async function viewTask() {
 }
 
 function stageText(c) {
-  return { check: "checking vantage point", profile: "profiling address", tcp: "TCP connect scan", probe: "identifying services", udp: "UDP probes" }[c.stage] || c.stage || "starting";
+  return c.stage ? tr("stg_" + c.stage) : tr("stg_start");
 }
 
 function renderReport(rep) {
   const nodes = [];
   for (const e of rep.errors || []) {
-    const box = el("div", { class: "card" }, el("h2", {}, "Not audited: " + e.ip), el("p", {}, e.reason));
+    const box = el("div", { class: "card" }, el("h2", {}, tr("not_audited", e.ip)), el("p", {}, txt(e.reason)));
     if (e.inside && lastScanBody) {
       box.append(el("button", { type: "button", onclick: async (ev) => {
         ev.target.disabled = true;
         try {
-          await api("POST", "/api/scan", { ...lastScanBody, accept_inside: true, ipv4: e.ip.includes(":") ? "" : e.ip, ipv6: e.ip.includes(":") ? e.ip : "" });
+          await api("POST", "/api/scan", { ...lastScanBody, accept_inside: true, lang, ipv4: e.ip.includes(":") ? "" : e.ip, ipv6: e.ip.includes(":") ? e.ip : "" });
           viewTask();
         } catch (err) { box.append(errorBox(err.message)); }
-      } }, "Continue anyway (results will be distorted)"));
+      } }, tr("continue_anyway")));
     }
     nodes.push(box);
   }
@@ -268,21 +374,21 @@ function renderSnapshot(s) {
   card.append(el("h2", {}, s.ip, " ", el("span", { class: "muted small" }, "IP" + s.family), " ", badge(risk)));
   if (s.intel) {
     const p = s.intel;
-    const bits = [[p.asn, p.org].filter(Boolean).join(" "), p.country, (p.ptr || []).map((x) => "ptr " + x).join(", ")].filter(Boolean);
-    if (bits.length) card.append(el("p", { class: "muted small" }, bits.join(" · "), p.source ? ` (via ${p.source})` : ""));
-    for (const h of p.hints || []) card.append(el("div", { class: "warn small" }, h));
+    const bits = [[p.asn, p.org].filter(Boolean).join(" "), p.country, (p.ptr || []).map((x) => tr("ptr", x)).join(", ")].filter(Boolean);
+    if (bits.length) card.append(el("p", { class: "muted small" }, bits.join(" · "), p.source ? tr("via", p.source) : ""));
+    for (const h of p.hints || []) card.append(el("div", { class: "warn small" }, txt(h)));
   }
   card.append(el("div", { class: "stats" },
-    stat(s.counts.open, "open"), stat(s.counts.closed, "closed"), stat(s.counts.filtered, "filtered"),
-    stat(dur(s.duration_ns), s.port_set + " scan"), stat(ms(s.timeout_ns), s.rtt_ns ? "timeout (rtt " + ms(s.rtt_ns) + ")" : "timeout")));
+    stat(s.counts.open, tr("open")), stat(s.counts.closed, tr("closed")), stat(s.counts.filtered, tr("filtered")),
+    stat(dur(s.duration_ns), tr("scan_kind", tr("ps_name_" + s.port_set))), stat(ms(s.timeout_ns), s.rtt_ns ? tr("timeout_rtt", ms(s.rtt_ns)) : tr("timeout"))));
   card.append(renderChanges(s.changes));
 
   // Port table.
   const byPort = {};
   for (const f of s.findings || []) if (f.proto === "tcp") (byPort[f.port] = byPort[f.port] || []).push(f);
   if ((s.open || []).length) {
-    card.append(el("h3", {}, "Open TCP ports"), el("div", { class: "scroll" }, el("table", { class: "tbl" },
-      el("thead", {}, el("tr", {}, el("th", {}, "Port"), el("th", {}, "Risk"), el("th", {}, "Service"), el("th", {}, "What answered"))),
+    card.append(el("h3", {}, tr("open_tcp")), el("div", { class: "scroll" }, el("table", { class: "tbl" },
+      el("thead", {}, el("tr", {}, el("th", {}, tr("col_port")), el("th", {}, tr("col_risk")), el("th", {}, tr("col_service")), el("th", {}, tr("col_answered")))),
       el("tbody", {}, s.open.map((o) => {
         const top = (byPort[o.port] || [{ risk: "info", service: "?" }])[0];
         return el("tr", { class: "r-" + top.risk }, el("td", { class: "mono" }, o.port + "/tcp"), el("td", {}, badge(top.risk)),
@@ -290,46 +396,46 @@ function renderSnapshot(s) {
       })))));
   }
   if ((s.udp || []).length) {
-    card.append(el("h3", {}, "UDP ", el("span", { class: "muted small" }, "(advisory: silence cannot tell open from filtered)")),
+    card.append(el("h3", {}, "UDP ", el("span", { class: "muted small" }, tr("udp_note"))),
       el("div", { class: "scroll" }, el("table", { class: "tbl" },
         el("tbody", {}, s.udp.map((u) => el("tr", {}, el("td", { class: "mono" }, u.port + "/udp"), el("td", {}, u.service),
-          el("td", {}, u.state), el("td", { class: "small" }, u.detail || "")))))));
+          el("td", {}, tr("udp_" + u.state)), el("td", { class: "small" }, u.detail || "")))))));
   }
 
   // Findings.
-  card.append(el("h3", {}, "Findings"));
-  if (!(s.findings || []).length) card.append(el("div", { class: "good" }, "Nothing answered. From this vantage point, nothing is exposed."));
+  card.append(el("h3", {}, tr("findings")));
+  if (!(s.findings || []).length) card.append(el("div", { class: "good" }, tr("nothing")));
   for (const f of s.findings || []) {
     card.append(el("details", { class: "finding " + f.risk, open: f.risk === "high" },
       el("summary", {}, badge(f.risk), el("span", { class: "mono" }, where(f)), el("b", {}, f.title), el("span", { class: "muted small" }, f.rule_id)),
       el("div", { class: "body" },
-        f.evidence ? el("p", {}, el("span", { class: "k" }, "Evidence"), el("code", {}, f.evidence)) : null,
-        el("p", {}, el("span", { class: "k" }, "What is this"), f.explain),
-        el("p", {}, el("span", { class: "k" }, "What to do"), f.advice),
-        el("p", { class: "small muted" }, el("span", { class: "k" }, "Rule"), f.rule_id, f.confidence ? " · confidence " + confText[f.confidence] : ""))));
+        f.evidence ? el("p", {}, el("span", { class: "k" }, tr("evidence")), el("code", {}, f.evidence)) : null,
+        el("p", {}, el("span", { class: "k" }, tr("what")), f.explain),
+        el("p", {}, el("span", { class: "k" }, tr("todo")), f.advice),
+        el("p", { class: "small muted" }, el("span", { class: "k" }, tr("rule")), f.rule_id, f.confidence ? tr("confidence", tr("conf_" + f.confidence)) : ""))));
   }
-  if ((s.notes || []).length) card.append(el("ul", { class: "small muted" }, s.notes.map((n) => el("li", {}, n))));
+  if ((s.notes || []).length) card.append(el("ul", { class: "small muted" }, s.notes.map((n) => el("li", {}, txt(n)))));
   card.append(el("p", { class: "small muted" },
-    `Audited ${fmtTime(s.time)} · source ${s.egress || "not checked"} · rules ${s.rules_version} · snapshot ${s.id} · `,
-    el("a", { href: "/api/snapshot/html?" + q({ label: s.label, id: s.id }) }, "Download HTML report"), " · ",
-    el("a", { href: "#/history/" + encodeURIComponent(s.label) }, "History")));
+    tr("footer_rec", fmtTime(s.time), s.egress || tr("not_checked"), s.rules_version, s.id),
+    el("a", { href: "/api/snapshot/html?" + q({ label: s.label, id: s.id, lang }) }, tr("dl_html")), " · ",
+    el("a", { href: "#/history/" + encodeURIComponent(s.label) }, tr("history"))));
   return [card];
 }
 
 function stat(v, label) { return el("div", { class: "stat" }, el("b", {}, String(v)), el("span", { class: "muted small" }, label)); }
 
 function renderChanges(ch) {
-  if (!ch) return el("p", { class: "muted small" }, "First audit for this label and address family — this is the baseline.");
+  if (!ch) return el("p", { class: "muted small" }, tr("baseline"));
   const box = el("div", { class: ch.opened || ch.udp_opened ? "warn" : "good" },
-    el("div", { class: "small" }, `Compared with ${fmtTime(ch.prev_time)} (${ch.prev_ip}):`));
-  if (ch.ip_changed) box.append(el("div", { class: "event" }, `Address changed: ${ch.prev_ip} → this run. It may not be the same line; compare with care.`));
-  if (ch.opened) box.append(el("div", { class: "new" }, "NEW open TCP ports: " + ch.opened.join(", ")));
-  if (ch.udp_opened) box.append(el("div", { class: "new" }, "NEW answering UDP ports: " + ch.udp_opened.join(", ")));
-  if (ch.closed) box.append(el("div", { class: "gone" }, "No longer open: " + ch.closed.join(", ")));
-  if (ch.udp_closed) box.append(el("div", { class: "gone" }, "UDP no longer answering: " + ch.udp_closed.join(", ")));
-  for (const c of ch.changed || []) box.append(el("div", { class: "small" }, `${c.port}/tcp answers differently: `, el("code", {}, c.before), " → ", el("code", {}, c.after)));
-  if (!ch.opened && !ch.closed && !ch.changed && !ch.udp_opened && !ch.udp_closed) box.append(el("div", {}, "No change in open ports."));
-  if (ch.coverage) box.append(el("div", { class: "small muted" }, ch.coverage));
+    el("div", { class: "small" }, tr("compared", fmtTime(ch.prev_time), ch.prev_ip)));
+  if (ch.ip_changed) box.append(el("div", { class: "event" }, tr("addr_changed", ch.prev_ip)));
+  if (ch.opened) box.append(el("div", { class: "new" }, tr("new_tcp", ch.opened.join(", "))));
+  if (ch.udp_opened) box.append(el("div", { class: "new" }, tr("new_udp", ch.udp_opened.join(", "))));
+  if (ch.closed) box.append(el("div", { class: "gone" }, tr("gone", ch.closed.join(", "))));
+  if (ch.udp_closed) box.append(el("div", { class: "gone" }, tr("udp_gone", ch.udp_closed.join(", "))));
+  for (const c of ch.changed || []) box.append(el("div", { class: "small" }, tr("answers_diff", c.port), el("code", {}, c.before), " → ", el("code", {}, c.after)));
+  if (!ch.opened && !ch.closed && !ch.changed && !ch.udp_opened && !ch.udp_closed) box.append(el("div", {}, tr("no_change")));
+  if (ch.coverage) box.append(el("div", { class: "small muted" }, txt(ch.coverage)));
   return box;
 }
 
@@ -339,14 +445,14 @@ async function viewLabels() {
   let labels;
   try { labels = await api("GET", "/api/labels"); } catch (_) { return; }
   if (!labels.length) {
-    setView(el("div", { class: "card" }, el("h1", {}, "History"), el("p", {}, "No audits yet. ", el("a", { href: "#/" }, "Start one"))));
+    setView(el("div", { class: "card" }, el("h1", {}, tr("history")), el("p", {}, tr("no_audits"), el("a", { href: "#/" }, tr("start_one")))));
     return;
   }
-  setView(el("h1", {}, "History"), el("div", { class: "labels" }, labels.map((l) =>
+  setView(el("h1", {}, tr("history")), el("div", { class: "labels" }, labels.map((l) =>
     el("a", { href: "#/history/" + encodeURIComponent(l.label) }, el("div", { class: "card" },
       el("h2", {}, l.label),
-      l.last ? el("p", { class: "small" }, badge(l.last.max_risk), ` ${l.last.counts.open} open · ${l.last.ip}`) : null,
-      el("p", { class: "muted small" }, `${l.count} snapshot(s)`, l.last ? " · last " + fmtTime(l.last.time) : ""))))));
+      l.last ? el("p", { class: "small" }, badge(l.last.max_risk), " " + tr("n_open", l.last.counts.open) + " · " + l.last.ip) : null,
+      el("p", { class: "muted small" }, tr("n_snaps", l.count), l.last ? tr("last", fmtTime(l.last.time)) : ""))))));
 }
 
 async function viewHistory(label) {
@@ -355,8 +461,8 @@ async function viewHistory(label) {
   const picked = [];
   const cmp = el("button", { class: "primary", type: "button", disabled: true, onclick: () => {
     location.hash = `#/diff/${encodeURIComponent(label)}/${picked[0]}/${picked[1]}`;
-  } }, "Compare selected");
-  const hint = el("span", { class: "muted small" }, "Select two snapshots of the same address family to compare side by side.");
+  } }, tr("compare_sel"));
+  const hint = el("span", { class: "muted small" }, tr("compare_hint"));
   const list = el("ul", { class: "timeline" }, metas.map((m) => {
     const box = el("input", { type: "checkbox", "aria-label": "select " + m.id, onchange: (e) => {
       if (e.target.checked) picked.push(m.id); else picked.splice(picked.indexOf(m.id), 1);
@@ -370,35 +476,35 @@ async function viewHistory(label) {
     return el("li", {}, box, el("div", {},
       el("div", { class: "meta" }, badge(m.max_risk),
         el("a", { href: `#/snap/${encodeURIComponent(label)}/${m.id}` }, fmtTime(m.time)),
-        el("span", { class: "mono" }, m.ip), el("span", { class: "muted small" }, `IP${m.family} · ${m.port_set} · ${m.counts.open} open`)),
-      m.ip_change ? el("div", { class: "event" }, "Address changed: " + m.ip_change) : null,
-      m.opened ? el("div", { class: "new small" }, "New: " + m.opened.join(", ")) : null,
-      m.closed ? el("div", { class: "gone small" }, "Closed: " + m.closed.join(", ")) : null));
+        el("span", { class: "mono" }, m.ip), el("span", { class: "muted small" }, `IP${m.family} · ${tr("ps_name_" + m.port_set)} · ${tr("n_open", m.counts.open)}`)),
+      m.ip_change ? el("div", { class: "event" }, tr("addr_event", m.ip_change)) : null,
+      m.opened ? el("div", { class: "new small" }, tr("new_short", m.opened.join(", "))) : null,
+      m.closed ? el("div", { class: "gone small" }, tr("closed_short", m.closed.join(", "))) : null));
   }));
-  setView(el("h1", {}, "History — " + label), el("div", { class: "card" }, el("div", { class: "row" }, cmp, hint), list));
+  setView(el("h1", {}, tr("hist_title", label)), el("div", { class: "card" }, el("div", { class: "row" }, cmp, hint), list));
 }
 
 async function viewSnapshot(label, id) {
   let s;
-  try { s = await api("GET", "/api/snapshot?" + q({ label, id })); } catch (err) { setView(errorBox(err.message)); return; }
-  setView(el("p", {}, el("a", { href: "#/history/" + encodeURIComponent(label) }, "← History — " + label)), ...renderSnapshot(s));
+  try { s = await api("GET", "/api/snapshot?" + q({ label, id, lang })); } catch (err) { setView(errorBox(err.message)); return; }
+  setView(el("p", {}, el("a", { href: "#/history/" + encodeURIComponent(label) }, tr("back", label))), ...renderSnapshot(s));
 }
 
 async function viewDiff(label, a, b) {
   let d;
-  try { d = await api("GET", "/api/diff?" + q({ label, a, b })); } catch (err) { setView(errorBox(err.message)); return; }
+  try { d = await api("GET", "/api/diff?" + q({ label, a, b, lang })); } catch (err) { setView(errorBox(err.message)); return; }
   const A = d.a, B = d.b;
   const ports = [...new Set([...(A.open || []), ...(B.open || [])].map((o) => o.port))].sort((x, y) => x - y);
   const find = (s, p) => (s.open || []).find((o) => o.port === p);
   const topRisk = (s, p) => { const f = (s.findings || []).find((x) => x.port === p && x.proto === "tcp"); return f ? f : null; };
   const cell = (s, p, cls) => {
     const o = find(s, p);
-    if (!o && !covers(s.scanned, p)) return el("td", { class: "diffcell" }, el("span", { class: "muted" }, "not scanned in this run"));
-    if (!o) return el("td", { class: "diffcell " + cls }, el("span", { class: "muted" }, "not open"));
+    if (!o && !covers(s.scanned, p)) return el("td", { class: "diffcell" }, el("span", { class: "muted" }, tr("not_scanned")));
+    if (!o) return el("td", { class: "diffcell " + cls }, el("span", { class: "muted" }, tr("not_open")));
     const f = topRisk(s, p);
     return el("td", { class: "diffcell " + cls }, f ? badge(f.risk) : null, " ", f ? f.title : "", el("div", {}, el("code", {}, evidenceOf(o))));
   };
-  const head = (s) => el("th", {}, fmtTime(s.time), el("div", { class: "mono" }, s.ip), el("div", { class: "muted small" }, `${s.port_set} · ${s.counts.open} open`));
+  const head = (s) => el("th", {}, fmtTime(s.time), el("div", { class: "mono" }, s.ip), el("div", { class: "muted small" }, `${tr("ps_name_" + s.port_set)} · ${tr("n_open", s.counts.open)}`));
   const rows = ports.map((p) => {
     const inA = !!find(A, p), inB = !!find(B, p);
     let cls = "";
@@ -409,13 +515,13 @@ async function viewDiff(label, a, b) {
     return el("tr", {}, el("td", { class: "mono" }, p + "/tcp"), cell(A, p, cls), cell(B, p, cls));
   });
   setView(
-    el("p", {}, el("a", { href: "#/history/" + encodeURIComponent(label) }, "← History — " + label)),
-    el("h1", {}, "Compare"),
+    el("p", {}, el("a", { href: "#/history/" + encodeURIComponent(label) }, tr("back", label))),
+    el("h1", {}, tr("compare")),
     d.warning ? el("div", { class: "warn" }, d.warning) : null,
     el("div", { class: "card" }, renderChanges(d.changes),
       el("div", { class: "scroll" }, el("table", { class: "tbl" },
-        el("thead", {}, el("tr", {}, el("th", {}, "Port"), head(A), head(B))),
-        el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: 3 }, "No open ports in either snapshot.")))))));
+        el("thead", {}, el("tr", {}, el("th", {}, tr("col_port")), head(A), head(B))),
+        el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: 3 }, tr("no_ports"))))))));
 }
 
 // covers reports whether a compact port spec ("1-1024,8080") includes port.
@@ -431,9 +537,9 @@ function covers(spec, port) {
 async function viewLog() {
   let entries;
   try { entries = await api("GET", "/api/audit-log"); } catch (_) { return; }
-  setView(el("h1", {}, "Audit log"), el("p", { class: "muted small" }, "Every login and audit on this server, newest first (", "audit.log in the data directory)."),
+  setView(el("h1", {}, tr("log_title")), el("p", { class: "muted small" }, tr("log_note")),
     el("div", { class: "card scroll" }, el("table", { class: "tbl" },
-      el("thead", {}, el("tr", {}, el("th", {}, "Time"), el("th", {}, "Action"), el("th", {}, "From"), el("th", {}, "Details"))),
+      el("thead", {}, el("tr", {}, el("th", {}, tr("col_time")), el("th", {}, tr("col_action")), el("th", {}, tr("col_from")), el("th", {}, tr("col_details")))),
       el("tbody", {}, entries.map((e) => {
         const { time, action, remote, user_agent, ...rest } = e;
         return el("tr", {}, el("td", { class: "small" }, fmtTime(time)), el("td", {}, action), el("td", { class: "mono" }, remote || ""),
@@ -464,7 +570,7 @@ async function boot() {
     if (!s.authenticated) { showLogin(); return; }
     session = s;
   } catch (err) {
-    setView(errorBox("Cannot reach the server: " + err.message));
+    setView(errorBox(tr("unreachable", err.message)));
     return;
   }
   document.getElementById("nav").hidden = false;
@@ -472,4 +578,5 @@ async function boot() {
 }
 
 window.addEventListener("hashchange", route);
+applyStatic();
 boot();

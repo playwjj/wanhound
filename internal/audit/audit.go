@@ -11,6 +11,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/intel"
 	"github.com/playwjj/wanhound/internal/knowledge"
 	"github.com/playwjj/wanhound/internal/probe"
@@ -34,6 +35,8 @@ type Request struct {
 	// Lab permits non-public targets (loopback, private) for the test
 	// bench. CGNAT stays refused: it is never a meaningful target.
 	Lab bool
+	// Lang is the language of progress messages ("en" or "zh").
+	Lang string
 
 	Concurrency int
 	Rate        int
@@ -55,13 +58,13 @@ type Hooks struct {
 	Progress func(Event)
 	// ConfirmInside is asked when the scanner looks like it is inside
 	// the target network and Request.AcceptInside is false.
-	ConfirmInside func(target, why string) bool
+	ConfirmInside func(target string, why i18n.Msg) bool
 }
 
 // TargetError is a target that could not be audited.
 type TargetError struct {
-	IP     string `json:"ip"`
-	Reason string `json:"reason"`
+	IP     string   `json:"ip"`
+	Reason i18n.Msg `json:"reason"`
 	// Inside marks the "you are inside the network" refusal, which a
 	// caller may retry with AcceptInside.
 	Inside bool `json:"inside,omitempty"`
@@ -158,6 +161,10 @@ func Run(ctx context.Context, st *store.Store, req Request, hooks Hooks) (*Repor
 	return rep, nil
 }
 
+// vantageArg references a vantage reason by key so composite messages
+// translate it when rendered.
+func vantageArg(why i18n.Msg) string { return "@" + why.Key }
+
 // canaryPorts are almost never open on a real host. If every one of
 // them completes a handshake, the "target" answering is not the target.
 var canaryPorts = []int{1, 47391, 65001}
@@ -199,7 +206,7 @@ func ExitCode(rep *Report) int {
 func auditOne(ctx context.Context, st *store.Store, req Request, addr string, ports []int, portSet string, hooks Hooks) (*store.Snapshot, *TargetError, error) {
 	ip, class, err := intel.Classify(addr)
 	if err != nil {
-		return nil, &TargetError{IP: addr, Reason: err.Error()}, nil
+		return nil, &TargetError{IP: addr, Reason: i18n.M("err.generic", err.Error())}, nil
 	}
 	ipStr := ip.String()
 	family := intel.Family(ip)
@@ -210,42 +217,43 @@ func auditOne(ctx context.Context, st *store.Store, req Request, addr string, po
 		if !req.Lab || class == intel.ClassCGNAT || class == intel.ClassUnspecified {
 			return nil, &TargetError{IP: ipStr, Reason: why}, nil
 		}
-		snap.Notes = append(snap.Notes, fmt.Sprintf("Lab mode: auditing a %s address. Results describe the test bench, not an internet-facing line.", class))
+		snap.Notes = append(snap.Notes, i18n.M("note.lab", class))
 	}
 
 	// Vantage-point self-check.
-	hooks.emit(Event{Target: ipStr, Stage: "check", Message: "checking where this scan runs from"})
-	var inside string
+	hooks.emit(Event{Target: ipStr, Stage: "check", Message: i18n.T(req.Lang, "prog.check")})
+	var inside string // catalog key of the vantage problem, if any
 	if intel.IsLocal(ip) {
-		inside = "this address belongs to the machine running WanHound, so the scan would go over loopback"
+		inside = "inside.local"
 	}
 	if !req.Offline {
 		snap.Egress = intel.Egress(ctx, family)
 		if inside == "" && snap.Egress == ipStr {
-			inside = "this machine's public egress address equals the target, so the scan runs from inside the network and NAT hairpinning distorts the result"
+			inside = "inside.egress"
 		}
 	} else {
-		snap.Notes = append(snap.Notes, "Offline mode: no third-party lookups (no ASN/PTR profile, egress self-check skipped).")
+		snap.Notes = append(snap.Notes, i18n.M("note.offline"))
 	}
 	if inside == "" {
-		if n := interceptionCanary(ctx, ipStr); n > 0 {
-			inside = fmt.Sprintf("all %d canary ports (ports that are virtually never open) accepted a connection, so something is answering for every port: most likely a transparent proxy / TUN-mode VPN on this machine (Clash, Surge, etc.), otherwise a catch-all host. Every port would read \"open\"", n)
+		if interceptionCanary(ctx, ipStr) > 0 {
+			inside = "inside.canary"
 		}
 	}
+	why := i18n.M(inside)
 	if inside != "" && !req.Lab {
-		ok := req.AcceptInside || (hooks.ConfirmInside != nil && hooks.ConfirmInside(ipStr, inside))
+		ok := req.AcceptInside || (hooks.ConfirmInside != nil && hooks.ConfirmInside(ipStr, why))
 		if !ok {
-			return nil, &TargetError{IP: ipStr, Inside: true, Reason: "This vantage point would distort the audit: " + inside + ". Run WanHound from a clean outside machine (e.g. a VPS without a proxy client), or confirm to continue anyway."}, nil
+			return nil, &TargetError{IP: ipStr, Inside: true, Reason: i18n.M("err.vantage", vantageArg(why))}, nil
 		}
-		snap.Notes = append(snap.Notes, "Vantage point overridden by the user ("+inside+"): treat the results as distorted.")
+		snap.Notes = append(snap.Notes, i18n.M("note.override", vantageArg(why)))
 	}
 
 	if inside != "" && req.Lab {
-		snap.Notes = append(snap.Notes, "Vantage warning (lab mode, not enforced): "+inside+".")
+		snap.Notes = append(snap.Notes, i18n.M("note.labvantage", vantageArg(why)))
 	}
 
 	if !req.Offline {
-		hooks.emit(Event{Target: ipStr, Stage: "profile", Message: "looking up ASN / reverse DNS"})
+		hooks.emit(Event{Target: ipStr, Stage: "profile", Message: i18n.T(req.Lang, "prog.profile")})
 		p := intel.Lookup(ctx, ip)
 		snap.Intel = &p
 	}
@@ -259,7 +267,7 @@ func auditOne(ctx context.Context, st *store.Store, req Request, addr string, po
 	}
 	est := scan.Estimate(len(ports), opts)
 	hooks.emit(Event{Target: ipStr, Stage: "tcp", Total: len(ports),
-		Message: fmt.Sprintf("scanning %d TCP ports (timeout %s, worst case ~%s)", len(ports), opts.Timeout.Round(time.Millisecond), est.Round(time.Second))})
+		Message: i18n.T(req.Lang, "prog.tcp", len(ports), opts.Timeout.Round(time.Millisecond), est.Round(time.Second))})
 	res := scan.Scan(ctx, ipStr, opts, func(done, total int) {
 		if done%256 == 0 || done == total {
 			hooks.emit(Event{Target: ipStr, Stage: "tcp", Done: done, Total: total})
@@ -280,11 +288,11 @@ func auditOne(ctx context.Context, st *store.Store, req Request, addr string, po
 		open = append(open, p.Port)
 	}
 	if len(open) > 0 {
-		hooks.emit(Event{Target: ipStr, Stage: "probe", Total: len(open), Message: fmt.Sprintf("identifying %d open port(s)", len(open))})
+		hooks.emit(Event{Target: ipStr, Stage: "probe", Total: len(open), Message: i18n.T(req.Lang, "prog.probe", len(open))})
 		snap.Open = probe.ProbeAll(ctx, ipStr, open, 3*time.Second)
 	}
 	if req.UDP {
-		hooks.emit(Event{Target: ipStr, Stage: "udp", Message: "probing the home UDP set"})
+		hooks.emit(Event{Target: ipStr, Stage: "udp", Message: i18n.T(req.Lang, "prog.udp")})
 		snap.UDP = scan.ScanUDP(ctx, ipStr, 0)
 	}
 	if ctx.Err() != nil {
@@ -294,12 +302,12 @@ func auditOne(ctx context.Context, st *store.Store, req Request, addr string, po
 	snap.Duration = time.Since(res.StartedAt)
 
 	if family == "v4" && o > 0 {
-		snap.Notes = append(snap.Notes, "IPv4: from outside it is impossible to tell whether an open port is the router's own service or a port forward / UPnP mapping to a device inside. The evidence (banner, certificate, title) is the best hint; check the router's forwarding and UPnP tables.")
+		snap.Notes = append(snap.Notes, i18n.M("note.v4"))
 	}
 	if f > 0 && f < len(ports) {
-		snap.Notes = append(snap.Notes, fmt.Sprintf("%d port(s) were filtered (no answer). From a single vantage point that is not proof they are closed — re-check important results from a second network.", f))
+		snap.Notes = append(snap.Notes, i18n.M("note.filtered", f))
 	} else if f == len(ports) {
-		snap.Notes = append(snap.Notes, "Every port was filtered: the address drops all unsolicited traffic from this vantage point (or the host is offline). Good — but confirm the address is right and the line is up.")
+		snap.Notes = append(snap.Notes, i18n.M("note.all_filtered"))
 	}
 
 	prev, err := st.Latest(req.Label, family)

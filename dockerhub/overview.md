@@ -71,6 +71,8 @@ Every finding carries its evidence (banner, certificate, page title), a confiden
 - **Small UDP set** (DNS — including open-resolver detection —, NTP, IKE, OpenVPN, SSDP/UPnP, mDNS, WireGuard), clearly marked advisory.
 - **Snapshot diff** — history is kept per *home label* (not per IP, because home addresses change), address changes are reported as events, and the next run calls out **newly opened ports** at the top. Diffs are coverage-aware: a `--quick` re-check never "closes" the high ports a full audit found.
 - **Vantage-point self-checks before scanning** — private, loopback, CGNAT (`100.64.0.0/10`) and reserved addresses are refused with an explanation; if this machine's public egress *is* the target, or a transparent proxy / TUN-mode VPN is answering for every port, WanHound stops and tells you why instead of producing a distorted report.
+- **English or Chinese reports** — terminal, HTML, Web UI and push digest (`--lang zh`, or automatically under a `zh_*` locale).
+- **LanHound companion mode** — audit every device's public IPv6, one by one, from a LanHound device export.
 - **CLI + Web UI, one binary** — `wanhound scan` for scripts and cron (exit-code contract, JSON, standalone HTML report, optional Telegram push), `wanhound serve` for a password-gated web interface with live progress, history timeline and side-by-side diff.
 
 ## How it differs
@@ -101,7 +103,8 @@ WanHound is a **defensive self-audit tool**, in the same family as nmap or Green
 
 - **P0 — done** — dual-stack single-target audit with address classification (CGNAT/private/reserved refusal), full/quick/custom port sets, adaptive timeouts, three-state engine, banner probing, structured rule base, terminal + JSON output, exit-code contract.
 - **P1 — done** — TLS/HTTP deep identification, combination rules, per-label snapshot diff, vantage-point self-checks, UDP probe set, Web UI with progress, report, history timeline and side-by-side diff, plus the full access-control set.
-- **P2 — partly done** — standalone HTML report export ✔, Telegram push ✔. Still open: importing an address list exported from LanHound (audited one by one — still no range scanning).
+- **P2 — done** — standalone HTML report export ✔, Telegram push ✔, auditing each device's IPv6 from a LanHound export ✔ (one by one — still no range scanning).
+- **v0.3** — Simplified Chinese reports (terminal, HTML, Web UI, Telegram digest).
 
 ## License
 

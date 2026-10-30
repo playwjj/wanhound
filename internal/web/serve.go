@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/playwjj/wanhound/internal/audit"
+	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/knowledge"
 	"github.com/playwjj/wanhound/internal/report"
 	"github.com/playwjj/wanhound/internal/scan"
@@ -266,6 +267,7 @@ type scanBody struct {
 	Offline      bool   `json:"offline"`
 	AcceptInside bool   `json:"accept_inside"`
 	Authorized   bool   `json:"authorized"`
+	Lang         string `json:"lang"`
 }
 
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +282,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 	req := audit.Request{
 		IPv4: strings.TrimSpace(b.IPv4), IPv6: strings.TrimSpace(b.IPv6), Label: strings.TrimSpace(b.Label),
-		PortSet: b.PortSet, UDP: b.UDP, Offline: b.Offline, AcceptInside: b.AcceptInside, Lab: s.opts.Lab,
+		PortSet: b.PortSet, UDP: b.UDP, Offline: b.Offline, AcceptInside: b.AcceptInside, Lab: s.opts.Lab, Lang: i18n.Normalize(b.Lang),
 		// Engine limits are fixed server-side; the browser cannot raise them.
 		Concurrency: scan.DefaultConcurrency, Rate: scan.DefaultRate,
 	}
@@ -326,8 +328,26 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"task": s.tasks.snapshot()})
+	t := s.tasks.snapshot()
+	if t != nil && t.Report != nil {
+		lang := langOf(r)
+		rep := *t.Report
+		rep.Targets = nil
+		for _, snap := range t.Report.Targets {
+			rep.Targets = append(rep.Targets, snap.Localized(lang))
+		}
+		rep.Errors = nil
+		for _, e := range t.Report.Errors {
+			e.Reason = e.Reason.Localized(lang)
+			rep.Errors = append(rep.Errors, e)
+		}
+		t.Report = &rep
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
 }
+
+// langOf reads the ?lang= parameter (default English).
+func langOf(r *http.Request) string { return i18n.Normalize(r.URL.Query().Get("lang")) }
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if !s.tasks.cancelCurrent() {
@@ -395,7 +415,7 @@ func (s *Server) loadSnapshot(w http.ResponseWriter, r *http.Request, idParam st
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if snap := s.loadSnapshot(w, r, "id"); snap != nil {
-		writeJSON(w, http.StatusOK, snap)
+		writeJSON(w, http.StatusOK, snap.Localized(langOf(r)))
 	}
 }
 
@@ -408,7 +428,7 @@ func (s *Server) handleSnapshotHTML(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="wanhound-%s.html"`, snap.ID))
 	// The exported page is standalone (inline CSS) and must render when
 	// opened from disk, not under this server's CSP.
-	report.SnapshotHTML(w, snap, snap.Intel == nil)
+	report.SnapshotHTML(w, snap, snap.Intel == nil, langOf(r))
 }
 
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
@@ -423,11 +443,17 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	if b.Time.Before(a.Time) {
 		a, b = b, a
 	}
-	out := map[string]any{"a": a, "b": b, "changes": store.Diff(a, b)}
+	lang := langOf(r)
+	ch := store.Diff(a, b)
+	if ch.Coverage != nil {
+		m := ch.Coverage.Localized(lang)
+		ch.Coverage = &m
+	}
+	out := map[string]any{"a": a.Localized(lang), "b": b.Localized(lang), "changes": ch}
 	if a.Family != b.Family {
-		out["warning"] = "These snapshots are of different address families (IPv4 vs IPv6); the comparison is not meaningful"
+		out["warning"] = i18n.T(lang, "web.warn_family")
 	} else if a.IP != b.IP {
-		out["warning"] = fmt.Sprintf("The address changed (%s → %s): the two runs may describe different lines", a.IP, b.IP)
+		out["warning"] = i18n.T(lang, "web.warn_addr", a.IP, b.IP)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

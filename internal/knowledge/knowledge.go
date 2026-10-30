@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/probe"
 	"github.com/playwjj/wanhound/internal/scan"
 )
@@ -157,7 +158,24 @@ type Finding struct {
 //go:embed rules.json
 var rulesJSON []byte
 
-var base Base
+// rules.zh.json holds the Simplified Chinese service/title/explain/advice
+// for every rule and combo ID; findings are localized at render time.
+//
+//go:embed rules.zh.json
+var rulesZH []byte
+
+// Text is the translatable part of a rule.
+type Text struct {
+	Service string `json:"service,omitempty"`
+	Title   string `json:"title"`
+	Explain string `json:"explain"`
+	Advice  string `json:"advice"`
+}
+
+var (
+	base         Base
+	translations = map[string]map[string]Text{}
+)
 
 func init() {
 	b, err := Parse(rulesJSON)
@@ -165,6 +183,53 @@ func init() {
 		panic(fmt.Sprintf("knowledge: built-in rules.json is invalid: %v", err))
 	}
 	base = *b
+	zh := map[string]Text{}
+	if err := json.Unmarshal(rulesZH, &zh); err != nil {
+		panic(fmt.Sprintf("knowledge: built-in rules.zh.json is invalid: %v", err))
+	}
+	translations[i18n.ZH] = zh
+}
+
+// Translation returns the rule text for id in lang, if there is one.
+func Translation(lang, id string) (Text, bool) {
+	t, ok := translations[i18n.Normalize(lang)][id]
+	return t, ok
+}
+
+// Localize returns f with its human text in lang. Unknown-port findings
+// (KH-000) are rendered from the message catalog.
+func Localize(f Finding, lang string) Finding {
+	lang = i18n.Normalize(lang)
+	switch {
+	case f.RuleID == "KH-000":
+		f.Service = i18n.T(lang, "rule.unknown.service")
+		f.Title = i18n.T(lang, "rule.unknown.title", fmt.Sprint(f.Port))
+		f.Explain = i18n.T(lang, "rule.unknown.explain")
+		f.Advice = i18n.T(lang, "rule.unknown.advice")
+	case lang != i18n.EN:
+		if t, ok := Translation(lang, f.RuleID); ok {
+			if t.Service != "" {
+				f.Service = t.Service
+			}
+			f.Title, f.Explain, f.Advice = t.Title, t.Explain, t.Advice
+		}
+	}
+	if f.Port == 0 {
+		f.Service = i18n.T(lang, "whole")
+		if ports, ok := strings.CutPrefix(f.Evidence, "ports "); ok {
+			f.Evidence = i18n.T(lang, "f.ports", ports)
+		}
+	}
+	return f
+}
+
+// LocalizeAll localizes a slice of findings (copy).
+func LocalizeAll(fs []Finding, lang string) []Finding {
+	out := make([]Finding, len(fs))
+	for i, f := range fs {
+		out[i] = Localize(f, lang)
+	}
+	return out
 }
 
 // Parse loads and validates a rule base.
@@ -303,19 +368,44 @@ func (b *Base) lookup(proto string, port int, ev evidence) []Finding {
 			Evidence: ev.summary, Confidence: conf, Tags: r.Tags,
 		})
 	}
+	out = dropCovered(out)
 	if len(out) == 0 && proto == "tcp" {
 		conf := "low"
 		if ev.summary != "" {
 			conf = "medium"
 		}
-		out = append(out, Finding{
-			RuleID: "KH-000", Port: port, Proto: proto, Service: "unknown", Risk: RiskLow,
-			Title:      fmt.Sprintf("Port %d is open and not in the known-service list", port),
-			Explain:    "Something answers on this port, but WanHound does not recognize it. Unknown high ports are often UPnP mappings that a device or app created for itself.",
-			Advice:     "If you did not open this deliberately, check the router for an unexpected port forward, DMZ host or UPnP mapping, and turn UPnP off if nothing needs it.",
-			Evidence:   ev.summary,
-			Confidence: conf,
-		})
+		out = append(out, Localize(Finding{
+			RuleID: "KH-000", Port: port, Proto: proto, Risk: RiskLow,
+			Evidence: ev.summary, Confidence: conf,
+		}, i18n.EN))
+	}
+	return out
+}
+
+// dropCovered removes port-number-only findings when a finding backed by
+// real evidence on the same port already shares one of their tags: "a
+// NAS page answers on 5001" makes "5001 is Synology's default port"
+// redundant.
+func dropCovered(fs []Finding) []Finding {
+	strong := map[string]bool{}
+	for _, f := range fs {
+		if f.Confidence != "low" {
+			for _, t := range f.Tags {
+				strong[t] = true
+			}
+		}
+	}
+	out := fs[:0]
+	for _, f := range fs {
+		covered := false
+		if f.Confidence == "low" {
+			for _, t := range f.Tags {
+				covered = covered || strong[t]
+			}
+		}
+		if !covered {
+			out = append(out, f)
+		}
 	}
 	return out
 }
@@ -386,7 +476,7 @@ func (b *Base) combos(t Target, fs []Finding) []Finding {
 			continue // a family-only combo needs at least one open port
 		}
 		risk, _ := parseRisk(c.Risk)
-		f := Finding{RuleID: c.ID, Service: "whole target", Risk: risk, Title: c.Title, Explain: c.Explain, Advice: c.Advice}
+		f := Finding{RuleID: c.ID, Service: i18n.T(i18n.EN, "whole"), Risk: risk, Title: c.Title, Explain: c.Explain, Advice: c.Advice}
 		if len(ports) > 0 {
 			sort.Ints(ports)
 			f.Evidence = "ports " + joinInts(dedupe(ports))

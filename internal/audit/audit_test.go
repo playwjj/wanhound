@@ -83,13 +83,22 @@ func TestAuditBaselineThenNewPort(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	report.Print(&buf, rep, false)
+	report.Print(&buf, rep, false, "en")
 	if out := buf.String(); !strings.Contains(out, "NEW open TCP ports: "+itoa(spare)) || !strings.Contains(out, "KH-031") {
 		t.Errorf("terminal report missing diff or rule id:\n%s", out)
 	}
 	buf.Reset()
-	if err := report.HTML(&buf, rep); err != nil || !strings.Contains(buf.String(), "NEW open: "+itoa(spare)) {
+	if err := report.HTML(&buf, rep, "en"); err != nil || !strings.Contains(buf.String(), "NEW open: "+itoa(spare)) {
 		t.Errorf("html report: %v", err)
+	}
+	buf.Reset()
+	report.Print(&buf, rep, false, "zh")
+	if out := buf.String(); !strings.Contains(out, "新开放的 TCP 端口："+itoa(spare)) || !strings.Contains(out, "SSH") || !strings.Contains(out, "中危") {
+		t.Errorf("Chinese terminal report:\n%s", out)
+	}
+	buf.Reset()
+	if err := report.HTML(&buf, rep, "zh"); err != nil || !strings.Contains(buf.String(), `lang="zh-CN"`) || !strings.Contains(buf.String(), "新开放") {
+		t.Errorf("Chinese html report: %v", err)
 	}
 	snaps, _ := st.List("武汉的家")
 	if len(snaps) != 2 {

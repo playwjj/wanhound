@@ -1,6 +1,7 @@
 // WanHound — audit your own home network's public exposure.
 //
-//	wanhound scan    --ipv4 203.0.113.7 [--ipv6 2001:db8::7] [--label home]
+//	wanhound scan    --ipv4 <home-ipv4> [--ipv6 <home-ipv6>] [--label home]
+//	wanhound scan-lanhound --csv devices.csv [--label home]
 //	wanhound serve   --addr 127.0.0.1:8687  (password via WANHOUND_PASSWORD[_HASH])
 //	wanhound history [--label home]
 //	wanhound show    --label home [--id <snapshot>] [--html out.html]
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/playwjj/wanhound/internal/audit"
+	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/knowledge"
 	"github.com/playwjj/wanhound/internal/report"
 	"github.com/playwjj/wanhound/internal/scan"
@@ -49,6 +51,8 @@ func main() {
 		err = runScan(os.Args[2:])
 	case "serve":
 		err = runServe(os.Args[2:])
+	case "scan-lanhound":
+		err = runScanLanHound(os.Args[2:])
 	case "history":
 		err = runHistory(os.Args[2:])
 	case "show":
@@ -84,6 +88,7 @@ func usage() {
 
 Usage:
   wanhound scan    --ipv4 <addr> [--ipv6 <addr>] [--label home] [--quick | --ports 22,80,8000-8100]
+  wanhound scan-lanhound --csv devices.csv [--label home]   audit each device's public IPv6 from a LanHound export
   wanhound serve   [--addr 127.0.0.1:8687]   (WANHOUND_PASSWORD or WANHOUND_PASSWORD_HASH required)
   wanhound history [--label <name>]
   wanhound show    --label <name> [--id <snapshot-id>] [--json | --html <file>]
@@ -107,6 +112,7 @@ func runScan(args []string) error {
 		htmlOut                 string
 		timeoutMS               int
 		tgToken, tgChat, notify string
+		lang                    string
 	)
 	fs.StringVar(&req.IPv4, "ipv4", "", "public IPv4 address to audit")
 	fs.StringVar(&req.IPv6, "ipv6", "", "public IPv6 address to audit")
@@ -129,6 +135,7 @@ func runScan(args []string) error {
 	fs.StringVar(&tgToken, "telegram-token", os.Getenv("WANHOUND_TELEGRAM_TOKEN"), "Telegram bot token for a result push")
 	fs.StringVar(&tgChat, "telegram-chat", os.Getenv("WANHOUND_TELEGRAM_CHAT"), "Telegram chat ID for a result push")
 	fs.StringVar(&notify, "notify", "alert", "when to push to Telegram: alert (exit code 1) | always")
+	fs.StringVar(&lang, "lang", i18n.FromEnv(), "report language: en | zh (default from WANHOUND_LANG / LANG)")
 	if err := fs.Parse(args); err != nil {
 		return exitError(2)
 	}
@@ -137,6 +144,8 @@ func runScan(args []string) error {
 		return exitError(2)
 	}
 	req.UDP = !noUDP
+	lang = i18n.Normalize(lang)
+	req.Lang = lang
 	req.AcceptInside = yes
 	req.Timeout = time.Duration(timeoutMS) * time.Millisecond
 	switch {
@@ -167,7 +176,7 @@ func runScan(args []string) error {
 	tty := isTerminal(os.Stderr)
 	rep, err := audit.Run(ctx, st, req, audit.Hooks{
 		Progress:      progressPrinter(tty),
-		ConfirmInside: confirmInside,
+		ConfirmInside: func(target string, why i18n.Msg) bool { return confirmInside(target, why.Render(lang)) },
 	})
 	if tty {
 		fmt.Fprint(os.Stderr, "\r\033[K")
@@ -185,29 +194,29 @@ func runScan(args []string) error {
 		enc.SetIndent("", "  ")
 		enc.Encode(rep)
 	} else {
-		report.Print(os.Stdout, rep, !noColor && os.Getenv("NO_COLOR") == "" && isTerminal(os.Stdout))
+		report.Print(os.Stdout, rep, !noColor && os.Getenv("NO_COLOR") == "" && isTerminal(os.Stdout), lang)
 	}
 	if htmlOut != "" {
-		if err := writeHTML(htmlOut, rep); err != nil {
+		if err := writeHTML(htmlOut, rep, lang); err != nil {
 			fmt.Fprintln(os.Stderr, "html:", err)
 		} else if !jsonOut {
 			fmt.Fprintln(os.Stderr, "HTML report written to", htmlOut)
 		}
 	}
 	if tgToken != "" && tgChat != "" && (notify == "always" || rep.ExitCode == 1) {
-		if err := sendTelegram(ctx, tgToken, tgChat, report.Summary(rep)); err != nil {
+		if err := sendTelegram(ctx, tgToken, tgChat, report.Summary(rep, lang)); err != nil {
 			fmt.Fprintln(os.Stderr, "telegram:", err)
 		}
 	}
 	return exitError(rep.ExitCode)
 }
 
-func writeHTML(path string, rep *audit.Report) error {
+func writeHTML(path string, rep *audit.Report, lang string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	if err := report.HTML(f, rep); err != nil {
+	if err := report.HTML(f, rep, lang); err != nil {
 		f.Close()
 		return err
 	}
@@ -313,6 +322,7 @@ func runShow(args []string) error {
 	jsonOut := fs.Bool("json", false, "print the snapshot JSON")
 	htmlOut := fs.String("html", "", "write a standalone HTML report to this file")
 	dataDir := fs.String("data-dir", envOr("WANHOUND_DATA", ""), "snapshot directory")
+	lang := fs.String("lang", i18n.FromEnv(), "report language: en | zh")
 	if err := fs.Parse(args); err != nil {
 		return exitError(2)
 	}
@@ -340,13 +350,13 @@ func runShow(args []string) error {
 		RulesVersion: snap.RulesVersion, Targets: []*store.Snapshot{snap}, Offline: snap.Intel == nil}
 	switch {
 	case *htmlOut != "":
-		return writeHTML(*htmlOut, rep)
+		return writeHTML(*htmlOut, rep, *lang)
 	case *jsonOut:
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(snap)
 	default:
-		report.Print(os.Stdout, rep, os.Getenv("NO_COLOR") == "" && isTerminal(os.Stdout))
+		report.Print(os.Stdout, rep, os.Getenv("NO_COLOR") == "" && isTerminal(os.Stdout), *lang)
 	}
 	return nil
 }

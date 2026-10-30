@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/intel"
 	"github.com/playwjj/wanhound/internal/knowledge"
 	"github.com/playwjj/wanhound/internal/probe"
@@ -54,7 +55,7 @@ type Snapshot struct {
 	RulesVersion string              `json:"rules_version"`
 	Intel        *intel.Profile      `json:"intel,omitempty"`
 	Egress       string              `json:"egress,omitempty"` // scanning machine's public address
-	Notes        []string            `json:"notes,omitempty"`
+	Notes        []i18n.Msg          `json:"notes,omitempty"`
 	Changes      *Changes            `json:"changes,omitempty"` // vs the previous snapshot
 }
 
@@ -293,7 +294,7 @@ type Changes struct {
 	UDPClosed []int           `json:"udp_closed,omitempty"`
 	// Coverage explains ports that could not be compared because one
 	// of the two runs did not look at them (e.g. --quick vs full).
-	Coverage string `json:"coverage,omitempty"`
+	Coverage *i18n.Msg `json:"coverage,omitempty"`
 }
 
 // ServiceChange is a port whose evidence differs between runs.
@@ -351,7 +352,8 @@ func Diff(prev, curr *Snapshot) *Changes {
 		}
 	}
 	if skipped > 0 {
-		ch.Coverage = fmt.Sprintf("%d open port(s) were outside the other run's port set and are not compared (%s vs %s scan)", skipped, prev.PortSet, curr.PortSet)
+		m := i18n.M("diff.coverage", skipped, "@portset."+prev.PortSet, "@portset."+curr.PortSet)
+		ch.Coverage = &m
 	}
 	if len(prev.UDP) > 0 && len(curr.UDP) > 0 {
 		pu, cu := udpOpen(prev.UDP), udpOpen(curr.UDP)
@@ -394,4 +396,26 @@ func coverage(spec string) func(int) bool {
 		set[p] = true
 	}
 	return func(p int) bool { return set[p] }
+}
+
+// Localized returns a copy of s with every human-readable text (findings,
+// notes, hints, coverage) rendered in lang, for display and APIs.
+func (s *Snapshot) Localized(lang string) *Snapshot {
+	c := *s
+	c.Findings = knowledge.LocalizeAll(s.Findings, lang)
+	c.Notes = i18n.LocalizeAll(s.Notes, lang)
+	if s.Intel != nil {
+		p := *s.Intel
+		p.Hints = i18n.LocalizeAll(p.Hints, lang)
+		c.Intel = &p
+	}
+	if s.Changes != nil {
+		ch := *s.Changes
+		if ch.Coverage != nil {
+			m := ch.Coverage.Localized(lang)
+			ch.Coverage = &m
+		}
+		c.Changes = &ch
+	}
+	return &c
 }

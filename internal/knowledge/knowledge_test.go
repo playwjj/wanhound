@@ -144,3 +144,51 @@ func keys(m map[string]Finding) []string {
 	}
 	return out
 }
+
+func TestEveryRuleTranslated(t *testing.T) {
+	ids := []string{}
+	for _, r := range Rules() {
+		ids = append(ids, r.ID)
+	}
+	for _, c := range base.Combos {
+		ids = append(ids, c.ID)
+	}
+	for _, id := range ids {
+		tr, ok := Translation("zh", id)
+		if !ok || tr.Title == "" || tr.Explain == "" || tr.Advice == "" {
+			t.Errorf("%s: missing Chinese translation", id)
+		}
+	}
+	if len(translations["zh"]) != len(ids) {
+		t.Errorf("rules.zh.json has %d entries for %d rules: stale IDs?", len(translations["zh"]), len(ids))
+	}
+}
+
+func TestLocalize(t *testing.T) {
+	fs := Evaluate(Target{Family: "v4", TCP: []probe.Info{{Port: 41234}, {Port: 23}}})
+	zh := LocalizeAll(fs, "zh-CN")
+	for i, f := range zh {
+		if f.Title == fs[i].Title || f.RuleID != fs[i].RuleID || f.Risk != fs[i].Risk {
+			t.Errorf("%s not localized: %q", f.RuleID, f.Title)
+		}
+	}
+	if got := Localize(fs[0], "en"); got.Title != fs[0].Title {
+		t.Errorf("English localization changed the text: %q", got.Title)
+	}
+}
+
+func TestPortFallbackCoveredByEvidence(t *testing.T) {
+	m := ids(Evaluate(Target{Family: "v4", TCP: []probe.Info{
+		{Port: 5001, HTTP: &probe.HTTPInfo{Status: 200, Title: "Synology DiskStation"}},
+	}}))
+	if _, ok := m["KH-042"]; !ok {
+		t.Error("NAS page should match KH-042")
+	}
+	if _, ok := m["KH-037"]; ok {
+		t.Error("port-only DSM fallback must be dropped when the NAS page already matched")
+	}
+	m = ids(Evaluate(Target{Family: "v4", TCP: []probe.Info{{Port: 5001}}}))
+	if _, ok := m["KH-037"]; !ok {
+		t.Error("without evidence the DSM port fallback still applies")
+	}
+}

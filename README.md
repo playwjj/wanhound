@@ -33,6 +33,8 @@ WanHound is the outside companion to [LanHound](https://github.com/playwjj/lanho
 - **Small UDP set** (DNS — including open-resolver detection —, NTP, IKE, OpenVPN, SSDP/UPnP, mDNS, WireGuard), clearly marked advisory.
 - **Snapshot diff** — history is kept per *home label* (not per IP, because home addresses change), address changes are reported as events, and the next run calls out **newly opened ports** at the top. Diffs are coverage-aware: a `--quick` re-check never "closes" the high ports a full audit found.
 - **Vantage-point self-checks before scanning** — private, loopback, CGNAT (`100.64.0.0/10`) and reserved addresses are refused with an explanation; if this machine's public egress *is* the target, or a transparent proxy / TUN-mode VPN is answering for every port, WanHound stops and tells you why instead of producing a distorted report.
+- **English or Chinese reports** — terminal, HTML, Web UI and push digest (`--lang zh`, or automatically under a `zh_*` locale).
+- **LanHound companion mode** — audit every device's public IPv6, one by one, from a LanHound device export.
 - **CLI + Web UI, one binary** — `wanhound scan` for scripts and cron (exit-code contract, JSON, standalone HTML report, optional Telegram push), `wanhound serve` for a password-gated web interface with live progress, history timeline and side-by-side diff.
 
 ## How it differs
@@ -70,17 +72,17 @@ docker build -t wanhound .
 docker run --rm wanhound scan --ipv4 <your-public-ip> --label home
 ```
 
-Run a scan **from outside your home network**:
+Run a scan **from outside your home network**, using the WAN address your router shows (placeholders below — documentation addresses such as `198.51.100.x` are refused as reserved):
 
 ```bash
 # Full audit of both stacks, saved under the label "home"
-./wanhound scan --ipv4 198.51.100.23 --ipv6 2001:db8:85a3::7 --label home
+./wanhound scan --ipv4 <home-ipv4> --ipv6 <home-ipv6> --label home
 
 # Fast re-check on the curated port set
-./wanhound scan --ipv4 198.51.100.23 --label home --quick
+./wanhound scan --ipv4 <home-ipv4> --label home --quick
 
 # Just a few ports (add --udp for the UDP set)
-./wanhound scan --ipv4 198.51.100.23 --ports 22,80,443,8291
+./wanhound scan --ipv4 <home-ipv4> --ports 22,80,443,8291
 
 # History and stored reports
 ./wanhound history                       # labels
@@ -131,7 +133,7 @@ Notes on the report:
 
 ```bash
 # crontab: daily quick check, Telegram push only when the exit code is 1
-0 7 * * * WANHOUND_TELEGRAM_TOKEN=… WANHOUND_TELEGRAM_CHAT=… wanhound scan --ipv4 198.51.100.23 --label home --quick
+0 7 * * * WANHOUND_TELEGRAM_TOKEN=… WANHOUND_TELEGRAM_CHAT=… wanhound scan --ipv4 <home-ipv4> --label home --quick
 ```
 
 `--json` prints the full machine-readable audit; `--html report.html` writes a standalone one-page report (inline CSS, readable on a phone — good for showing the family).
@@ -148,6 +150,21 @@ Notes on the report:
 | `--concurrency` / `--rate` | 512 / 2000 per s | Hard-capped at 2048 / 10000. |
 | `--yes` | off | Continue when the vantage-point check objects. |
 | `--data-dir` | `~/.local/share/wanhound` | Or `WANHOUND_DATA`. |
+| `--lang` | from locale | Report language: `en` / `zh` (or `WANHOUND_LANG`; a `zh_*` locale picks Chinese). |
+
+### With LanHound: every device's IPv6, one by one
+
+IPv6 has no NAT: each device at home has its own public address, and those addresses are only visible from inside the LAN. Hand WanHound the device table exported by [LanHound](https://github.com/playwjj/lanhound) (the CSV export of its device list, `/api/devices.csv`) and it audits each device's public IPv6 address **one at a time** — still single-target audits, never a range scan:
+
+```bash
+./wanhound scan-lanhound --csv lanhound-devices.csv --label home --dry-run   # list the targets
+./wanhound scan-lanhound --csv lanhound-devices.csv --label home --quick     # confirm, then audit each
+```
+
+- By default only the address LanHound saw most recently is used per device; `--all-addresses` takes them all. ULA and link-local addresses are skipped.
+- Each device gets its own history label (`home · <device>`), so every device has its own diff.
+- The target list is shown and must be confirmed (`--yes` for non-interactive runs); more targets than `--max` (default 32) are refused.
+- IPv6 privacy (temporary) addresses rotate; an address seen a while ago may be gone.
 
 ### Web UI
 
@@ -198,7 +215,8 @@ address ──▶ classify (public? CGNAT? private?) ──▶ connect-scan (3-s
 
 - **P0 — done** — dual-stack single-target audit with address classification (CGNAT/private/reserved refusal), full/quick/custom port sets, adaptive timeouts, three-state engine, banner probing, structured rule base, terminal + JSON output, exit-code contract.
 - **P1 — done** — TLS/HTTP deep identification, combination rules, per-label snapshot diff, vantage-point self-checks, UDP probe set, Web UI with progress, report, history timeline and side-by-side diff, plus the full access-control set.
-- **P2 — partly done** — standalone HTML report export ✔, Telegram push ✔. Still open: importing an address list exported from LanHound (audited one by one — still no range scanning).
+- **P2 — done** — standalone HTML report export ✔, Telegram push ✔, auditing each device's IPv6 from a LanHound export ✔ (one by one — still no range scanning).
+- **v0.3** — Simplified Chinese reports (terminal, HTML, Web UI, Telegram digest).
 
 ## Known limitations
 
@@ -216,12 +234,12 @@ address ──▶ classify (public? CGNAT? private?) ──▶ connect-scan (3-s
 make build     # ./wanhound (Go 1.25+, standard library only)
 make test      # unit + integration tests (engine, rules, store/diff, audit pipeline, web access control)
 make vet
-make testbed   # acceptance bench on a Linux Docker host (see below)
+make testbed   # acceptance bench on a Linux Docker host (see below; CI runs it on every push)
 ```
 
 **Test bench.** `scripts/testbed.sh <linux-binary>` starts a container whose ports have known states — listeners (`open`), a TCP-reset reject and an unused port (`closed`), an iptables `DROP` and an ICMP reject (`filtered`), a UDP open resolver, a dropped and a closed UDP port — audits it with `wanhound scan --lab`, asserts every state, rule hit and UDP result, then opens one more port and asserts the diff and exit code 1. The firewall rules live inside the container's network namespace; the host firewall is untouched. `--lab` (CLI and `serve`) permits private/loopback targets for exactly this purpose; CGNAT and reserved ranges stay refused.
 
-The rule base is `internal/knowledge/rules.json`: bump `version` when editing, keep specific evidence rules before port-number fallbacks within a `group`, and run `make test` — the loader rejects duplicate IDs, bad regexes and rules without conditions.
+The rule base is `internal/knowledge/rules.json`, with Chinese texts in `rules.zh.json` keyed by rule ID (a test fails if any rule lacks a translation); other user-facing text lives in `internal/i18n/catalog.go`. Bump `version` when editing rules, keep specific evidence rules before port-number fallbacks within a `group`, and run `make test` — the loader rejects duplicate IDs, bad regexes and rules without conditions.
 
 ## License
 

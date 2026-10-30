@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
+  <!-- WanHound logo, dark-background variant: light rings, amber observer blip. -->
+  <g fill="none" stroke="#DCE9F2" stroke-width="10" stroke-linecap="round">
+    <circle cx="120" cy="124" r="36" pathLength="100" stroke-dasharray="76 24" transform="rotate(150 120 124)"/>
+    <circle cx="120" cy="124" r="59" pathLength="100" stroke-dasharray="76 24" transform="rotate(-40 120 124)"/>
+    <circle cx="120" cy="124" r="82" pathLength="100" stroke-dasharray="76 24" transform="rotate(80 120 124)"/>
+    <path d="M 134.5 21.0 A 104 104 0 0 1 219.4 93.6"/>
+  </g>
+  <circle cx="120" cy="124" r="13" fill="#DCE9F2"/>
+  <circle cx="187" cy="44" r="9.5" fill="#F59E0B"/>
+</svg>

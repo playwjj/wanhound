@@ -128,6 +128,7 @@ func probeUDP(ctx context.Context, ip string, p udpProbe, timeout time.Duration)
 		return r
 	}
 	defer conn.Close()
+	enableICMPErrors(conn)
 	buf := make([]byte, 2048)
 	for attempt := 0; attempt < 2 && ctx.Err() == nil; attempt++ {
 		if _, err := conn.Write(p.payload()); err != nil {

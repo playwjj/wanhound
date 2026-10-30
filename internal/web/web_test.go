@@ -256,3 +256,19 @@ func TestDeleteEndpoints(t *testing.T) {
 		t.Error("deletions must be audit-logged")
 	}
 }
+
+// The CSP forbids inline style attributes, so the UI must never set one:
+// it would silently not apply (the login button once lost its margin).
+func TestNoInlineStyles(t *testing.T) {
+	for _, f := range []string{"static/app.js", "static/index.html"} {
+		data, err := staticFS.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{`style: "`, `style="`, `setAttribute("style"`} {
+			if strings.Contains(string(data), bad) {
+				t.Errorf("%s uses an inline style (%s) that the CSP blocks; use a CSS class", f, bad)
+			}
+		}
+	}
+}

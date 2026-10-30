@@ -12,6 +12,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
@@ -80,7 +81,15 @@ details.finding .body p { margin: 6px 0; }
 .diffcell.changed { background: var(--medium-bg); }
 .labels { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .labels a { text-decoration: none; display: block; }
-.login { max-width: 380px; margin: 40px auto; }
+.login { max-width: 400px; margin: 8vh auto 40px; padding: 28px 24px 24px; }
+.login h1 { text-align: center; margin: 6px 0 4px; font-size: 20px; }
+.login > p { text-align: center; margin: 0 0 20px; text-wrap: balance; }
+.login input[type=password] { padding: 10px 12px; }
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.login-name { font-size: 22px; } .login-name b { color: var(--accent); }
+button.block { display: block; width: 100%; margin-top: 16px; padding: 10px 16px; }
+.login .err { margin: 10px 0 0; }
 td.mono { white-space: nowrap; }
 .small-btn { padding: 2px 10px; font-size: 12px; margin-top: 4px; }
 input[type=file] { font: inherit; color: var(--muted); max-width: 100%; }
+.is-login .foot { text-align: center; }

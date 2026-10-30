@@ -13,6 +13,7 @@ let lastScanBody = null;
 const L = {
   en: {
     signin: "Sign in", signin_note: "This WanHound server is password-protected. Every audit is logged.", password: "Password",
+    bad_pw: "Wrong password.", throttled: "Too many failed attempts. Try again later.",
     nav_new: "New audit", nav_task: "Current", nav_history: "History", nav_log: "Audit log", logout: "Log out",
     footer: "Self-audit of your own home network's public exposure. Only audit addresses you own or are authorized to test.",
     ph_v4: "your router's WAN IPv4", ph_v6: "a device's global IPv6",
@@ -59,6 +60,7 @@ const L = {
   },
   zh: {
     signin: "登录", signin_note: "这台 WanHound 服务器受口令保护，每次审计都会被记录。", password: "口令",
+    bad_pw: "口令错误。", throttled: "失败次数过多，请稍后再试。",
     nav_new: "新建审计", nav_task: "当前任务", nav_history: "历史", nav_log: "审计日志", logout: "退出",
     footer: "对你自家网络公网暴露面的自查。只审计你拥有或已获授权测试的地址。",
     ph_v4: "路由器 WAN 口的 IPv4", ph_v6: "设备的公网 IPv6",
@@ -213,9 +215,11 @@ function errorBox(msg) { return el("div", { class: "err", role: "alert" }, msg);
 function showLogin(message) {
   stopPolling();
   document.getElementById("nav").hidden = true;
+  document.body.classList.add("is-login");
   const pw = el("input", { type: "password", id: "pw", autocomplete: "current-password", required: true });
   const msg = el("div");
   if (message) msg.append(errorBox(message));
+  const btn = el("button", { class: "primary block", type: "submit" }, tr("signin"));
   const form = el("form", { class: "card login", onsubmit: async (e) => {
     e.preventDefault();
     btn.disabled = true;
@@ -224,16 +228,17 @@ function showLogin(message) {
       await api("POST", "/api/login", { password: pw.value });
       await boot();
     } catch (err) {
-      msg.append(errorBox(err.message));
+      const m = err.message || "";
+      msg.append(errorBox(m === "wrong password" ? tr("bad_pw") : m.startsWith("too many failed logins") ? tr("throttled") : m));
       btn.disabled = false;
       pw.select();
     }
   } },
+    el("div", { class: "login-brand" }, el("img", { src: "logo.svg", alt: "", width: 56, height: 56 }),
+      el("div", { class: "login-name" }, "Wan", el("b", {}, "Hound"))),
     el("h1", {}, tr("signin")),
     el("p", { class: "muted small" }, tr("signin_note")),
-    el("label", { class: "f", for: "pw" }, tr("password")), pw, msg);
-  const btn = el("button", { class: "primary", type: "submit", style: "margin-top:12px" }, tr("signin"));
-  form.append(btn);
+    el("label", { class: "f", for: "pw" }, tr("password")), pw, msg, btn);
   setView(form);
   pw.focus();
 }
@@ -687,6 +692,7 @@ async function boot() {
     return;
   }
   document.getElementById("nav").hidden = false;
+  document.body.classList.remove("is-login");
   route();
 }
 

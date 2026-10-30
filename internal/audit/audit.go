@@ -227,7 +227,21 @@ func auditOne(ctx context.Context, st *store.Store, req Request, addr string, po
 		inside = "inside.local"
 	}
 	if !req.Offline {
-		snap.Egress = intel.Egress(ctx, family)
+		snap.Egress, snap.EgressSource = intel.Egress(ctx, family), "echo"
+	}
+	if snap.Egress == "" {
+		snap.Egress, snap.EgressSource = intel.LocalEgress(family), "local"
+	}
+	if snap.Egress == "" {
+		snap.EgressSource = "failed"
+		if req.Offline {
+			snap.EgressSource = "offline"
+		}
+	}
+	if snap.EgressSource == "failed" {
+		snap.Notes = append(snap.Notes, i18n.M("note.egress_failed", "IP"+family))
+	}
+	if !req.Offline {
 		if inside == "" && snap.Egress == ipStr {
 			inside = "inside.egress"
 		}

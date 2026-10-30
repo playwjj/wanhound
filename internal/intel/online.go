@@ -170,6 +170,28 @@ func Egress(ctx context.Context, family string) string {
 	return ""
 }
 
+// LocalEgress returns this machine's own outbound source address for the
+// family when it is public — on IPv6 (no NAT) that is the address the
+// internet sees. "Connecting" a UDP socket only picks a route; no packet
+// is sent, so this works offline. Empty when the source is private (NAT,
+// a proxy's TUN interface) or there is no route.
+func LocalEgress(family string) string {
+	network, probe := "udp4", "192.0.2.1:9" // documentation addresses: never contacted
+	if family == "v6" {
+		network, probe = "udp6", "[2001:db8::1]:9"
+	}
+	c, err := net.Dial(network, probe)
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	ip := c.LocalAddr().(*net.UDPAddr).IP
+	if _, class, err := Classify(ip.String()); err != nil || class != ClassPublic {
+		return ""
+	}
+	return ip.String()
+}
+
 // IsLocal reports whether ip is assigned to one of this machine's
 // interfaces — common with IPv6, where the host's own global address is
 // the "public IP". Scanning yourself goes over loopback and says

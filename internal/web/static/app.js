@@ -35,7 +35,7 @@ const L = {
     udp_note: "(advisory: silence cannot tell open from filtered)", findings: "Findings", nothing: "Nothing answered. From this vantage point, nothing is exposed.",
     evidence: "Evidence", what: "What is this", todo: "What to do", rule: "Rule", confidence: " · confidence {0}",
     conf_high: "high — matched identifying evidence", conf_medium: "medium — protocol recognized", conf_low: "low — port number only",
-    footer_rec: "Audited {0} · source {1} · rules {2} · snapshot {3} · ", not_checked: "not checked", dl_html: "Download HTML report", history: "History",
+    footer_rec: "Audited {0} · source {1} · rules {2} · snapshot {3} · ", not_checked: "not checked", egress_failed: "lookup failed", dl_html: "Download HTML report", history: "History",
     baseline: "First audit for this label and address family — this is the baseline.", compared: "Compared with {0} ({1}):",
     addr_changed: "Address changed: {0} → this run. It may not be the same line; compare with care.",
     new_tcp: "NEW open TCP ports: {0}", new_udp: "NEW answering UDP ports: {0}", gone: "No longer open: {0}", udp_gone: "UDP no longer answering: {0}",
@@ -82,7 +82,7 @@ const L = {
     udp_note: "（仅供参考：没有应答无法区分开放与被过滤）", findings: "结论", nothing: "没有任何端口应答。从这个扫描点看，没有暴露面。",
     evidence: "证据", what: "这是什么", todo: "怎么办", rule: "规则", confidence: " · 置信度{0}",
     conf_high: "高（匹配到识别性证据）", conf_medium: "中（识别出协议）", conf_low: "低（仅凭端口号）",
-    footer_rec: "审计于 {0} · 扫描源 {1} · 规则库 {2} · 快照 {3} · ", not_checked: "未检查", dl_html: "下载 HTML 报告", history: "历史",
+    footer_rec: "审计于 {0} · 扫描源 {1} · 规则库 {2} · 快照 {3} · ", not_checked: "未检查", egress_failed: "查询失败", dl_html: "下载 HTML 报告", history: "历史",
     baseline: "这是该标签和地址族的第一次审计——作为基线。", compared: "与 {0}（{1}）相比：",
     addr_changed: "地址已变化：{0} → 本次。可能已不是同一条线路，对比请谨慎。",
     new_tcp: "新开放的 TCP 端口：{0}", new_udp: "新应答的 UDP 端口：{0}", gone: "已不再开放：{0}", udp_gone: "UDP 已不再应答：{0}",
@@ -525,7 +525,7 @@ function renderSnapshot(s) {
   }
   if ((s.notes || []).length) card.append(el("ul", { class: "small muted" }, s.notes.map((n) => el("li", {}, txt(n)))));
   card.append(el("p", { class: "small muted" },
-    tr("footer_rec", fmtTime(s.time), s.egress || tr("not_checked"), s.rules_version, s.id),
+    tr("footer_rec", fmtTime(s.time), s.egress || (s.egress_source === "failed" ? tr("egress_failed") : tr("not_checked")), s.rules_version, s.id),
     el("a", { href: "/api/snapshot/html?" + q({ label: s.label, id: s.id, lang }) }, tr("dl_html")), " · ",
     el("a", { href: "#/history/" + encodeURIComponent(s.label) }, tr("history"))));
   return [card];

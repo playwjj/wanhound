@@ -46,6 +46,7 @@ footer { margin-top:24px; font-size:13px; color:var(--muted); }
     {{if .UDPOpened}}<span class="new">{{t $.Lang "h.new_udp" (ints .UDPOpened)}}</span>{{end}}
     {{if .Closed}}<span class="gone">{{t $.Lang "h.gone" (ints .Closed)}}</span>{{end}}
     {{range .Changed}}<br>{{t $.Lang "h.changed" .Port}} <code>{{.Before}}</code> → <code>{{.After}}</code>{{end}}
+    {{if .Empty}}<br>{{t $.Lang "h.no_change"}}{{end}}
     {{with .Coverage}}<br><span class="muted">{{render . $.Lang}}</span>{{end}}</p>
   {{else}}<p class="small muted">{{t $.Lang "h.baseline"}}</p>{{end}}
 
@@ -65,7 +66,7 @@ footer { margin-top:24px; font-size:13px; color:var(--muted); }
   {{else}}<p class="gone">{{t $.Lang "r.nothing"}}</p>{{end}}
 
   {{if .Notes}}<ul class="small muted">{{range .Notes}}<li>{{render . $.Lang}}</li>{{end}}</ul>{{end}}
-  <p class="small muted">{{t $.Lang "h.source" (or .Egress (t $.Lang "r.not_checked")) (spec .Scanned $.Lang) .ID}}</p>
+  <p class="small muted">{{t $.Lang "h.source" (egress . $.Offline $.Lang) (spec .Scanned $.Lang) .ID}}</p>
 </div>
 {{end}}
 <footer>{{t .Lang "h.footer"}}</footer>

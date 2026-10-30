@@ -55,8 +55,12 @@ type Snapshot struct {
 	RulesVersion string              `json:"rules_version"`
 	Intel        *intel.Profile      `json:"intel,omitempty"`
 	Egress       string              `json:"egress,omitempty"` // scanning machine's public address
-	Notes        []i18n.Msg          `json:"notes,omitempty"`
-	Changes      *Changes            `json:"changes,omitempty"` // vs the previous snapshot
+	// EgressSource says how Egress was found: "echo" (public echo
+	// service), "local" (own public source address), or why it is empty:
+	// "failed" (no lookup worked) or "offline".
+	EgressSource string     `json:"egress_source,omitempty"`
+	Notes        []i18n.Msg `json:"notes,omitempty"`
+	Changes      *Changes   `json:"changes,omitempty"` // vs the previous snapshot
 }
 
 // OpenPorts returns the open TCP port numbers.

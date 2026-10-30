@@ -38,6 +38,11 @@ type TLSInfo struct {
 	NotAfter   time.Time `json:"not_after"`
 	SelfSigned bool      `json:"self_signed,omitempty"`
 	Expired    bool      `json:"expired,omitempty"`
+	// Refused is set when the port speaks TLS but would not complete a
+	// handshake without a hostname (SNI) — typical of reverse proxies and
+	// HTTPS services that only answer for their own domain names. The
+	// certificate fields are then empty.
+	Refused string `json:"refused,omitempty"`
 }
 
 // HTTPInfo is what an HTTP GET / revealed.
@@ -60,7 +65,9 @@ func (i Info) Evidence() string {
 	if i.Banner != "" {
 		parts = append(parts, fmt.Sprintf("banner=%q", i.Banner))
 	}
-	if t := i.TLS; t != nil {
+	if t := i.TLS; t != nil && t.Refused != "" {
+		parts = append(parts, fmt.Sprintf("tls handshake refused without a hostname/SNI (%s)", t.Refused))
+	} else if t != nil {
 		s := "tls"
 		if t.CN != "" {
 			s += fmt.Sprintf(" cn=%q", t.CN)
@@ -102,12 +109,20 @@ func (i Info) Evidence() string {
 func Probe(ip string, port int, timeout time.Duration) Info {
 	info := Info{Port: port}
 	addr := net.JoinHostPort(ip, fmt.Sprint(port))
-	if t, conn := probeTLS(addr, timeout); t != nil {
+	t, conn, err := probeTLS(addr, timeout)
+	if t != nil {
 		info.TLS = t
-		info.HTTP = httpGet(conn, ip, "/", timeout)
+		info.HTTP, _ = httpGet(conn, ip, "/", timeout)
 		conn.Close()
 	} else {
-		info.Banner, info.HTTP = probePlain(addr, ip, timeout)
+		var tlsRecord bool
+		info.Banner, info.HTTP, tlsRecord = probePlain(addr, ip, timeout)
+		switch {
+		case alertOf(err) != "":
+			info.TLS = &TLSInfo{Refused: alertOf(err)}
+		case tlsRecord:
+			info.TLS = &TLSInfo{Refused: "answered plaintext with a TLS alert"}
+		}
 	}
 	followRedirect(&info, addr, ip, timeout)
 	return info
@@ -143,7 +158,7 @@ func followRedirect(info *Info, addr, host string, timeout time.Duration) {
 		return
 	}
 	defer conn.Close()
-	if next := httpGet(conn, host, path, timeout); next != nil {
+	if next, _ := httpGet(conn, host, path, timeout); next != nil {
 		h.Title = next.Title
 		if h.Server == "" {
 			h.Server = next.Server
@@ -173,14 +188,27 @@ func ProbeAll(ctx context.Context, ip string, ports []int, timeout time.Duration
 	return out
 }
 
-func probeTLS(addr string, timeout time.Duration) (*TLSInfo, *tls.Conn) {
+// alertOf returns the TLS alert a server sent to refuse the handshake
+// ("remote error: tls: unrecognized name" → "alert: unrecognized name"),
+// or "" when the failure was not a TLS-level refusal.
+func alertOf(err error) string {
+	if err == nil {
+		return ""
+	}
+	if _, after, ok := strings.Cut(err.Error(), "remote error: tls: "); ok {
+		return "alert: " + after
+	}
+	return ""
+}
+
+func probeTLS(addr string, timeout time.Duration) (*TLSInfo, *tls.Conn, error) {
 	d := &net.Dialer{Timeout: timeout}
 	conn, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{
 		InsecureSkipVerify: true, // auditing, not trusting: we only read the cert
 		MinVersion:         tls.VersionTLS10,
 	})
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	state := conn.ConnectionState()
 	t := &TLSInfo{Version: tls.VersionName(state.Version)}
@@ -197,7 +225,7 @@ func probeTLS(addr string, timeout time.Duration) (*TLSInfo, *tls.Conn) {
 		t.Expired = time.Now().After(c.NotAfter)
 		t.SelfSigned = c.Subject.String() == c.Issuer.String() && c.CheckSignatureFrom(c) == nil
 	}
-	return t, conn
+	return t, conn, nil
 }
 
 func issuerName(c *x509.Certificate) string {
@@ -210,11 +238,13 @@ func issuerName(c *x509.Certificate) string {
 	return c.Issuer.String()
 }
 
-func probePlain(addr, host string, timeout time.Duration) (string, *HTTPInfo) {
+// probePlain reads a speak-first banner or else tries HTTP. tlsRecord
+// reports that the reply to the HTTP request was a TLS record.
+func probePlain(addr, host string, timeout time.Duration) (banner string, h *HTTPInfo, tlsRecord bool) {
 	d := &net.Dialer{Timeout: timeout}
 	conn, err := d.Dial("tcp", addr)
 	if err != nil {
-		return "", nil
+		return "", nil, false
 	}
 	defer conn.Close()
 
@@ -225,30 +255,36 @@ func probePlain(addr, host string, timeout time.Duration) (string, *HTTPInfo) {
 	conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 	line, err := r.ReadString('\n')
 	if line != "" {
-		return sanitize(line), nil
+		return sanitize(line), nil, false
 	}
 	if err != nil {
 		if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
-			return "", nil // closed on us without a word
+			return "", nil, false // closed on us without a word
 		}
 	}
-	return "", httpGet(conn, host, "/", timeout)
+	h, tlsRecord = httpGet(conn, host, "/", timeout)
+	return "", h, tlsRecord
 }
 
-// httpGet sends one GET / on an established connection and parses the
-// response head plus the start of the body.
-func httpGet(conn net.Conn, host, path string, timeout time.Duration) *HTTPInfo {
+// httpGet sends one GET on an established connection and parses the
+// response head plus the start of the body. tlsRecord is true when the
+// peer answered with a TLS record instead (a TLS-only port).
+func httpGet(conn net.Conn, host, path string, timeout time.Duration) (h *HTTPInfo, tlsRecord bool) {
 	conn.SetDeadline(time.Now().Add(timeout))
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
 	fmt.Fprintf(conn, "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: WanHound (home exposure self-audit)\r\nAccept: text/html\r\nConnection: close\r\n\r\n", path, host)
-	resp, err := http.ReadResponse(bufio.NewReader(io.LimitReader(conn, 256*1024)), nil)
+	br := bufio.NewReader(io.LimitReader(conn, 256*1024))
+	if head, err := br.Peek(2); err == nil && head[0] == 0x15 && head[1] == 0x03 {
+		return nil, true // TLS alert record: content type 21, version 3.x
+	}
+	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer resp.Body.Close()
-	h := &HTTPInfo{
+	h = &HTTPInfo{
 		Status:    resp.StatusCode,
 		Server:    sanitize(resp.Header.Get("Server")),
 		PoweredBy: sanitize(resp.Header.Get("X-Powered-By")),
@@ -260,7 +296,7 @@ func httpGet(conn net.Conn, host, path string, timeout time.Duration) *HTTPInfo 
 	if resp.StatusCode == http.StatusBadRequest && httpsOnly.Match(body) {
 		h.HTTPSOnly = true
 	}
-	return h
+	return h, false
 }
 
 // httpsOnly matches the stock "you spoke HTTP to a TLS port" errors of

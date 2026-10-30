@@ -1,11 +1,15 @@
 package probe
 
 import (
+	"crypto/tls"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,5 +136,57 @@ func TestProbeHTTPSOnly(t *testing.T) {
 	info := Probe("127.0.0.1", ln.Addr().(*net.TCPAddr).Port, 2*time.Second)
 	if info.HTTP == nil || !info.HTTP.HTTPSOnly {
 		t.Errorf("HTTPS-only port not recognized: %+v", info.HTTP)
+	}
+}
+
+// A TLS server that refuses handshakes without SNI (reverse proxies, Caddy,
+// nginx ssl_reject_handshake) must still be recognized as TLS.
+func TestProbeTLSRefusedWithoutSNI(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.StartTLS()
+	defer srv.Close()
+	cert := srv.TLS.Certificates[0]
+	srv.TLS.Certificates = nil
+	srv.TLS.GetCertificate = func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if h.ServerName == "" {
+			return nil, fmt.Errorf("no SNI")
+		}
+		return &cert, nil
+	}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	host, port := hostPort(t, srv.URL)
+	info := Probe(host, port, 2*time.Second)
+	if info.TLS == nil || info.TLS.Refused == "" {
+		t.Fatalf("SNI-only TLS server not recognized: %+v", info)
+	}
+	if !strings.Contains(info.Evidence(), "SNI") {
+		t.Errorf("evidence = %q", info.Evidence())
+	}
+}
+
+// nginx-style: plaintext requests get a TLS alert record back.
+func TestProbeTLSAlertToPlaintext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				buf := make([]byte, 1024)
+				c.Read(buf)
+				c.Write([]byte{0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x70}) // fatal alert
+				c.Close()
+			}()
+		}
+	}()
+	info := Probe("127.0.0.1", ln.Addr().(*net.TCPAddr).Port, 2*time.Second)
+	if info.TLS == nil || info.TLS.Refused == "" || info.HTTP != nil {
+		t.Errorf("TLS alert to plaintext not recognized: %+v", info)
 	}
 }

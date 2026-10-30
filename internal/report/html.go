@@ -33,6 +33,7 @@ var page = template.Must(template.New("report").Funcs(template.FuncMap{
 	"ints":   JoinInts,
 	"spec":   shortSpec,
 	"render": func(m i18n.Msg, lang string) string { return m.Render(lang) },
+	"egress": func(s *store.Snapshot, offline bool, lang string) string { return egressText(s, offline, lang) },
 	"where": func(f knowledge.Finding, lang string) string {
 		if f.Port == 0 {
 			return i18n.T(lang, "whole")

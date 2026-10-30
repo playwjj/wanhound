@@ -192,3 +192,15 @@ func TestPortFallbackCoveredByEvidence(t *testing.T) {
 		t.Error("without evidence the DSM port fallback still applies")
 	}
 }
+
+// A TLS port that refuses handshakes without SNI is HTTPS, not an
+// unidentified port-number guess.
+func TestRefusedTLSIsHTTPS(t *testing.T) {
+	m := ids(Evaluate(Target{Family: "v6", TCP: []probe.Info{{Port: 443, TLS: &probe.TLSInfo{Refused: "alert: internal error"}}}}))
+	if f, ok := m["KH-018"]; !ok || f.Confidence != "medium" {
+		t.Errorf("want KH-018 (HTTPS, protocol recognized), got %v", keys(m))
+	}
+	if _, ok := m["KH-020"]; ok {
+		t.Error("port-only KH-020 must not apply once TLS is recognized")
+	}
+}

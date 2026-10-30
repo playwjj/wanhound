@@ -63,14 +63,7 @@ func Print(w io.Writer, rep *audit.Report, color bool, lang string) {
 	fmt.Fprintf(w, "\n%s%s%s\n", c.dim, p.t("r.record"), c.reset)
 	fmt.Fprintln(w, p.t("r.rec_time", rep.Started.Format("2006-01-02 15:04:05 MST"), rep.Duration.Round(time.Second)))
 	for _, s := range rep.Targets {
-		src := s.Egress
-		if src == "" {
-			src = p.t("r.not_checked")
-			if rep.Offline {
-				src += p.t("r.offline_suffix")
-			}
-		}
-		fmt.Fprintln(w, p.t("r.rec_target", s.IP, s.Family, src, p.t("portset."+s.PortSet), shortSpec(s.Scanned, p.lang), s.ID))
+		fmt.Fprintln(w, p.t("r.rec_target", s.IP, s.Family, egressText(s, rep.Offline, p.lang), p.t("portset."+s.PortSet), shortSpec(s.Scanned, p.lang), s.ID))
 	}
 	fmt.Fprintln(w, p.t("r.rec_rules", rep.RulesVersion))
 	fmt.Fprintln(w, p.t("r.footer"))
@@ -234,6 +227,20 @@ func Summary(rep *audit.Report, lang string) string {
 		b.WriteString(t("s.not_audited", e.IP) + "\n")
 	}
 	return b.String()
+}
+
+// egressText describes the scanning machine's public address for the
+// audit record, saying why it is missing when it is.
+func egressText(s *store.Snapshot, offline bool, lang string) string {
+	switch {
+	case s.Egress != "":
+		return s.Egress
+	case s.EgressSource == "failed":
+		return i18n.T(lang, "r.egress_failed")
+	case s.EgressSource == "offline" || offline:
+		return i18n.T(lang, "r.not_checked") + i18n.T(lang, "r.offline_suffix")
+	}
+	return i18n.T(lang, "r.not_checked")
 }
 
 // JoinInts renders "22, 80, 443".

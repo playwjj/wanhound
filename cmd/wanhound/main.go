@@ -25,6 +25,9 @@ import (
 	"github.com/playwjj/wanhound/internal/web"
 )
 
+// version is stamped at release time via -ldflags -X main.version.
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -60,7 +63,7 @@ type exitError int
 func (e exitError) Error() string { return fmt.Sprintf("exit %d", int(e)) }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `WanHound — audit your own home network's public exposure.
+	fmt.Fprintf(os.Stderr, `WanHound %s — audit your own home network's public exposure.
 
 Usage:
   wanhound scan  --ipv4 <addr> [--ipv6 <addr>] [options]
@@ -68,7 +71,7 @@ Usage:
 
 Only audit addresses you own or are authorized to test.
 Run scan from OUTSIDE the network being audited (e.g. a VPS).
-`)
+`, version)
 }
 
 type scanFlags struct {

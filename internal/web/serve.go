@@ -425,9 +425,9 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"a": a, "b": b, "changes": store.Diff(a, b)}
 	if a.Family != b.Family {
-		out["warning"] = "these snapshots are of different address families (IPv4 vs IPv6); the comparison is not meaningful"
+		out["warning"] = "These snapshots are of different address families (IPv4 vs IPv6); the comparison is not meaningful"
 	} else if a.IP != b.IP {
-		out["warning"] = fmt.Sprintf("the address changed (%s → %s): the two runs may describe different lines", a.IP, b.IP)
+		out["warning"] = fmt.Sprintf("The address changed (%s → %s): the two runs may describe different lines", a.IP, b.IP)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

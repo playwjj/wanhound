@@ -81,3 +81,4 @@ details.finding .body p { margin: 6px 0; }
 .labels { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .labels a { text-decoration: none; display: block; }
 .login { max-width: 380px; margin: 40px auto; }
+td.mono { white-space: nowrap; }

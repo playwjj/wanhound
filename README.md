@@ -6,6 +6,8 @@
 
 <p align="center"><strong>Audit your own home network's public exposure — from the outside.</strong></p>
 
+<p align="center">English · <a href="README.zh-CN.md">简体中文</a></p>
+
 <p align="center">
 Give WanHound your home's public IPv4 or IPv6 address. It probes every port from an external vantage point, identifies what answers, explains the risk in plain language, and diffs the result against last time.
 </p>
@@ -15,6 +17,10 @@ Give WanHound your home's public IPv4 or IPv6 address. It probes every port from
 Your router's admin page, your NAS login, a database a container quietly published, a port some device opened for itself via UPnP — from inside the house, none of this is visible. WanHound stands outside and knocks on every door, then writes you a readable report instead of raw scan output.
 
 WanHound is the outside companion to [LanHound](https://github.com/playwjj/lanhound), which watches devices *inside* the LAN. LanHound sees who is home; WanHound checks which doors face the street.
+
+<p align="center">
+  <img src="docs/images/report.jpg" width="820" alt="WanHound report: risk-colored open ports, evidence, and what changed since last week">
+</p>
 
 ## What it does
 
@@ -153,6 +159,19 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 ```
 
 New audit form → live progress (cancellable) → report page with risk-colored port table and expandable "what is this / what to do" cards → per-label history timeline (address-change events, new/closed ports) → pick any two snapshots for a side-by-side diff → download any snapshot as a standalone HTML report.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/findings.jpg" alt="Findings with evidence, explanation, advice and rule ID"><br><sub>Every finding: evidence, what it is, what to do, rule ID and confidence.</sub></td>
+    <td width="50%"><img src="docs/images/compare.jpg" alt="Side-by-side comparison of two snapshots"><br><sub>Side-by-side diff of any two snapshots — new ports in red, address changes flagged.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/history.jpg" alt="History timeline per home label"><br><sub>History per home label, not per IP.</sub></td>
+    <td width="50%"><img src="docs/images/new-audit.jpg" alt="New audit form"><br><sub>New audit: one IPv4 and/or one IPv6, with an explicit authorization assertion.</sub></td>
+  </tr>
+</table>
+
+<sub>Screenshots show demo data (documentation addresses).</sub>
 
 The gate is not optional:
 

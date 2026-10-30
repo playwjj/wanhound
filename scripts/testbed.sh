@@ -19,7 +19,16 @@ trap cleanup EXIT
 docker build -q -t wanhound-testbed "$HERE/testbed" >/dev/null
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --cap-add NET_ADMIN wanhound-testbed >/dev/null
-for _ in $(seq 1 30); do docker logs "$NAME" 2>&1 | grep -q "bench ready" && break; sleep 0.5; done
+ready=0
+for _ in $(seq 1 60); do
+  if docker logs "$NAME" 2>&1 | grep -q "bench ready"; then ready=1; break; fi
+  sleep 0.5
+done
+if [ "$ready" != 1 ]; then
+  echo "::error::test bench container did not start: $(docker logs "$NAME" 2>&1 | tail -3 | tr '\n' ' ')"
+  docker logs "$NAME"
+  exit 1
+fi
 IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME")
 echo "bench at $IP"
 
@@ -37,7 +46,9 @@ code1, code2 = int(sys.argv[3]), int(sys.argv[4])
 fails = []
 def check(cond, msg):
     print(("PASS " if cond else "FAIL ") + msg)
-    if not cond: fails.append(msg)
+    if not cond:
+        fails.append(msg)
+        print("::error::testbed: " + msg)  # GitHub annotation
 
 t = r1["targets"][0]
 openp = sorted(o["port"] for o in t["open"])

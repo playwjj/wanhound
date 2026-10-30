@@ -15,6 +15,17 @@ Touch /tmp/open-10000 inside the container to start a listener on
 """
 import os, socket, subprocess, threading, time
 
+def firewall():
+    """Pick an iptables backend that works in this kernel: nft first,
+    then legacy (some CI kernels have only one of them available)."""
+    for tool in ("iptables", "iptables-legacy"):
+        if subprocess.run([tool, "-L", "INPUT"], capture_output=True).returncode == 0:
+            return tool
+    raise SystemExit("bench: no working iptables backend (need NET_ADMIN and nf_tables or ip_tables)")
+
+IPT = firewall()
+print("bench firewall:", IPT, flush=True)
+
 def sh(*cmd):
     subprocess.run(cmd, check=True)
 
@@ -22,7 +33,7 @@ for rule in (["-p", "tcp", "--dport", "8080", "-j", "DROP"],
              ["-p", "tcp", "--dport", "8443", "-j", "REJECT", "--reject-with", "tcp-reset"],
              ["-p", "tcp", "--dport", "9000", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"],
              ["-p", "udp", "--dport", "1900", "-j", "DROP"]):
-    sh("iptables", "-A", "INPUT", *rule)
+    sh(IPT, "-A", "INPUT", *rule)
 
 def tcp(port, handler):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

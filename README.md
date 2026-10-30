@@ -259,6 +259,7 @@ make build     # ./wanhound (Go 1.25+, standard library only)
 make test      # unit + integration tests (engine, rules, store/diff, audit pipeline, web access control)
 make vet
 make testbed   # acceptance bench on a Linux Docker host (see below; CI runs it on every push)
+# CI also runs the full test suite on Windows and macOS (socket error semantics differ per OS)
 ```
 
 **Test bench.** `scripts/testbed.sh <linux-binary>` starts a container whose ports have known states — listeners (`open`), a TCP-reset reject and an unused port (`closed`), an iptables `DROP` and an ICMP admin-prohibited reject (`filtered`), a UDP open resolver, a dropped and a closed UDP port — audits it with `wanhound scan --lab`, asserts every state, rule hit and UDP result, then opens one more port and asserts the diff and exit code 1. The firewall rules live inside the container's network namespace; the host firewall is untouched. `--lab` (CLI and `serve`) permits private/loopback targets for exactly this purpose; CGNAT and reserved ranges stay refused.

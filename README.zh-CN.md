@@ -263,6 +263,7 @@ make build     # ./wanhound（Go 1.25+，仅标准库）
 make test      # 单元 + 集成测试（引擎、规则、快照/对比、审计流程、Web 访问控制）
 make vet
 make testbed   # 在 Linux Docker 主机上运行验收靶机（见下；CI 每次提交都会跑）
+# CI 还会在 Windows 和 macOS 上运行全部测试（各系统的套接字错误语义不同）
 ```
 
 **测试靶机**：`scripts/testbed.sh <linux 二进制>` 会启动一个端口状态已知的容器——有监听（`open`）、TCP reset 拒绝和未使用端口（`closed`）、iptables `DROP` 和 ICMP admin-prohibited 拒绝（`filtered`）、一个 UDP 开放解析器、一个被丢弃和一个关闭的 UDP 端口——用 `wanhound scan --lab` 审计它，逐项断言端口状态、规则命中和 UDP 结果；然后再打开一个端口，断言对比结果和退出码 1。防火墙规则只存在于容器自己的网络命名空间，宿主机防火墙不受影响。`--lab`（CLI 和 `serve` 均支持）正是为此允许私网/回环目标；CGNAT 和保留地址仍然拒绝。

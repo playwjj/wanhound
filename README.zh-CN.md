@@ -83,7 +83,14 @@ docker run -d --name wanhound -p 127.0.0.1:8687:8687 \
   ghcr.io/playwjj/wanhound serve --addr 0.0.0.0:8687
 ```
 
-命名卷用来保存快照，下一次运行才能和上一次做 diff（不挂卷又加 `--rm`，快照会随容器一起丢掉）。卷必须挂在 `/home/wanhound/.local/share/wanhound` 这个确切路径上：容器以非 root 用户运行、数据就存放在那里，挂到其他路径（例如 `/data`）会直接报权限错误。
+命名卷用来保存快照，下一次运行才能和上一次做 diff（不挂卷又加 `--rm`，快照会随容器一起丢掉）。卷默认挂在 `/home/wanhound/.local/share/wanhound`：这个目录在镜像里预先建好，属主是容器内的非 root 用户 `wanhound`（uid 1000），Docker 会把这份属主复制进新建的命名卷，所以开箱即用。
+
+数据目录并不是写死的：想把数据放在其他路径（例如 `/var/lib/wanhound`），把卷挂到那里、*同时*把程序的数据目录也指过去（`-e WANHOUND_DATA=/var/lib/wanhound`，或给命令加 `-data-dir` 参数），再给新卷改一次属主即可。挂到镜像未预建的路径时，新卷默认是 root 属主，非 root 进程写不进去，会报 `permission denied`——直接挂到 `/data` 不做这两步就是这个下场：
+
+```bash
+docker run --rm --user root --entrypoint chown \
+  -v wanhound-data:/var/lib/wanhound ghcr.io/playwjj/wanhound -R 1000:1000 /var/lib/wanhound
+```
 
 **在家庭网络之外**运行扫描，地址用路由器 WAN 口显示的公网地址（下面是占位符；`198.51.100.x` 这类文档示例地址属于保留段，会被拒绝）：
 

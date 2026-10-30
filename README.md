@@ -83,7 +83,14 @@ docker run -d --name wanhound -p 127.0.0.1:8687:8687 \
   passport888/wanhound serve --addr 0.0.0.0:8687
 ```
 
-The named volume keeps your snapshots, so the next run can diff against the last one (without it, `--rm` throws the history away). Mount it at exactly `/home/wanhound/.local/share/wanhound`: the container runs as a non-root user and keeps its data there, so mounting the volume at another path (for example `/data`) fails with a permission error.
+The named volume keeps your snapshots, so the next run can diff against the last one (without it, `--rm` throws the history away). Mount it at the default data directory, `/home/wanhound/.local/share/wanhound`: that directory is pre-created in the image, owned by the non-root `wanhound` user (uid 1000), and Docker copies that ownership into a fresh named volume — so it works out of the box.
+
+The data directory is not fixed: to keep data somewhere else (say `/var/lib/wanhound`), mount the volume there *and* point the app at the same path (`-e WANHOUND_DATA=/var/lib/wanhound`, or pass `-data-dir`), then fix the fresh volume's ownership once. A volume mounted at a path the image does not pre-create starts out owned by root, and the non-root process cannot write to it — you would get `permission denied`, the same failure as mounting at `/data` without these steps:
+
+```bash
+docker run --rm --user root --entrypoint chown \
+  -v wanhound-data:/var/lib/wanhound passport888/wanhound -R 1000:1000 /var/lib/wanhound
+```
 
 Run a scan **from outside your home network**, using the WAN address your router shows (placeholders below — documentation addresses such as `198.51.100.x` are refused as reserved):
 

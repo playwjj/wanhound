@@ -239,7 +239,7 @@ make vet
 make testbed   # 在 Linux Docker 主机上运行验收靶机（见下；CI 每次提交都会跑）
 ```
 
-**测试靶机**：`scripts/testbed.sh <linux 二进制>` 会启动一个端口状态已知的容器——有监听（`open`）、TCP reset 拒绝和未使用端口（`closed`）、iptables `DROP` 和 ICMP 拒绝（`filtered`）、一个 UDP 开放解析器、一个被丢弃和一个关闭的 UDP 端口——用 `wanhound scan --lab` 审计它，逐项断言端口状态、规则命中和 UDP 结果；然后再打开一个端口，断言对比结果和退出码 1。防火墙规则只存在于容器自己的网络命名空间，宿主机防火墙不受影响。`--lab`（CLI 和 `serve` 均支持）正是为此允许私网/回环目标；CGNAT 和保留地址仍然拒绝。
+**测试靶机**：`scripts/testbed.sh <linux 二进制>` 会启动一个端口状态已知的容器——有监听（`open`）、TCP reset 拒绝和未使用端口（`closed`）、iptables `DROP` 和 ICMP admin-prohibited 拒绝（`filtered`）、一个 UDP 开放解析器、一个被丢弃和一个关闭的 UDP 端口——用 `wanhound scan --lab` 审计它，逐项断言端口状态、规则命中和 UDP 结果；然后再打开一个端口，断言对比结果和退出码 1。防火墙规则只存在于容器自己的网络命名空间，宿主机防火墙不受影响。`--lab`（CLI 和 `serve` 均支持）正是为此允许私网/回环目标；CGNAT 和保留地址仍然拒绝。
 
 规则库位于 `internal/knowledge/rules.json`，中文文本在 `rules.zh.json`（按规则编号对应，测试会检查每条规则都有翻译）；界面和报告的其他文字在 `internal/i18n/catalog.go`。修改规则时请更新 `version`；同一个 `group` 内，具体的证据规则要放在端口号兜底规则之前；然后运行 `make test`——加载器会拒绝重复编号、错误的正则和没有任何条件的规则。
 

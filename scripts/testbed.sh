@@ -53,7 +53,7 @@ def check(cond, msg):
 t = r1["targets"][0]
 openp = sorted(o["port"] for o in t["open"])
 check(openp == [22, 80], f"open ports = {openp}, want [22, 80]")
-check(t["counts"] == {"open": 2, "closed": 2, "filtered": 2}, f"counts = {t['counts']}, want 2 open / 2 closed (8443 RST, 10000) / 2 filtered (8080 DROP, 9000 ICMP)")
+check(t["counts"] == {"open": 2, "closed": 2, "filtered": 2}, f"counts = {t['counts']}, want 2 open / 2 closed (8443 RST, 10000) / 2 filtered (8080 DROP, 9000 ICMP admin-prohibited)")
 ids = {f["rule_id"] for f in t["findings"]}
 for want in ("KH-031", "KH-040", "KC-001", "KU-001"):
     check(want in ids, f"finding {want} present")

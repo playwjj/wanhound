@@ -4,7 +4,7 @@ TCP  22    open      SSH banner
 TCP  80    open      HTTP page titled like a router admin UI
 TCP  8080  filtered  listener behind an iptables DROP
 TCP  8443  closed    iptables REJECT with TCP reset
-TCP  9000  filtered  iptables REJECT with ICMP port-unreachable
+TCP  9000  filtered  iptables REJECT with ICMP admin-prohibited (a firewall saying "no")
 TCP  10000 closed    nothing listening (until the "open" control file appears)
 UDP  53    open      answers every query with RA set (an "open resolver")
 UDP  1900  open|filt iptables DROP
@@ -31,7 +31,7 @@ def sh(*cmd):
 
 for rule in (["-p", "tcp", "--dport", "8080", "-j", "DROP"],
              ["-p", "tcp", "--dport", "8443", "-j", "REJECT", "--reject-with", "tcp-reset"],
-             ["-p", "tcp", "--dport", "9000", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"],
+             ["-p", "tcp", "--dport", "9000", "-j", "REJECT", "--reject-with", "icmp-admin-prohibited"],
              ["-p", "udp", "--dport", "1900", "-j", "DROP"]):
     sh(IPT, "-A", "INPUT", *rule)
 

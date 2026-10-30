@@ -385,9 +385,12 @@ func probe(ctx context.Context, opts Options, ip string, port int) (PortResult, 
 	}
 }
 
-// classify maps a dial error to a port state. Only an explicit refusal
-// (RST) is "closed"; timeouts and ICMP unreachables are "filtered",
-// matching how nmap reads the same signals.
+// classify maps a dial error to a port state. A refusal is "closed";
+// timeouts and ICMP host/network-unreachable or admin-prohibited are
+// "filtered", matching how nmap reads the same signals. One limit of
+// connect(): Linux reports an ICMP *port*-unreachable exactly like a
+// TCP reset (ECONNREFUSED), so a firewall rejecting that way reads as
+// closed — which, for exposure, is what it is.
 func classify(err error) State {
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return StateClosed

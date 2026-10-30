@@ -68,9 +68,22 @@ make build
 或者用 Docker：
 
 ```bash
+# 全端口双栈审计，结果存到标签 "home" 下
 docker run --rm -v wanhound-data:/home/wanhound/.local/share/wanhound \
-  ghcr.io/playwjj/wanhound scan --ipv4 <家里的IPv4> --label home
+  ghcr.io/playwjj/wanhound scan --ipv4 <家里的IPv4> --ipv6 <家里的IPv6> --label home
+
+# 用精选端口集快速复检
+docker run --rm -v wanhound-data:/home/wanhound/.local/share/wanhound \
+  ghcr.io/playwjj/wanhound scan --ipv4 <家里的IPv4> --label home --quick
+
+# Web 界面（强制口令，见下方"安全与范围"）
+docker run -d --name wanhound -p 127.0.0.1:8687:8687 \
+  -e WANHOUND_PASSWORD='<设置一个强口令>' \
+  -v wanhound-data:/home/wanhound/.local/share/wanhound \
+  ghcr.io/playwjj/wanhound serve --addr 0.0.0.0:8687
 ```
+
+命名卷用来保存快照，下一次运行才能和上一次做 diff（不挂卷又加 `--rm`，快照会随容器一起丢掉）。卷必须挂在 `/home/wanhound/.local/share/wanhound` 这个确切路径上：容器以非 root 用户运行、数据就存放在那里，挂到其他路径（例如 `/data`）会直接报权限错误。
 
 **在家庭网络之外**运行扫描，地址用路由器 WAN 口显示的公网地址（下面是占位符；`198.51.100.x` 这类文档示例地址属于保留段，会被拒绝）：
 

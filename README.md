@@ -65,12 +65,25 @@ cd wanhound
 make build
 ```
 
-Or Docker:
+Or Docker (published image — or `docker build -t wanhound .` and use that tag instead):
 
 ```bash
-docker build -t wanhound .
-docker run --rm wanhound scan --ipv4 <your-public-ip> --label home
+# Full-port audit of both stacks, saved under the label "home"
+docker run --rm -v wanhound-data:/home/wanhound/.local/share/wanhound \
+  passport888/wanhound scan --ipv4 <your-public-ip> --ipv6 <your-public-ipv6> --label home
+
+# Fast re-check on the curated port set
+docker run --rm -v wanhound-data:/home/wanhound/.local/share/wanhound \
+  passport888/wanhound scan --ipv4 <your-public-ip> --label home --quick
+
+# Web UI (always password-gated — see Safety & scope)
+docker run -d --name wanhound -p 127.0.0.1:8687:8687 \
+  -e WANHOUND_PASSWORD='<choose-a-strong-password>' \
+  -v wanhound-data:/home/wanhound/.local/share/wanhound \
+  passport888/wanhound serve --addr 0.0.0.0:8687
 ```
+
+The named volume keeps your snapshots, so the next run can diff against the last one (without it, `--rm` throws the history away). Mount it at exactly `/home/wanhound/.local/share/wanhound`: the container runs as a non-root user and keeps its data there, so mounting the volume at another path (for example `/data`) fails with a permission error.
 
 Run a scan **from outside your home network**, using the WAN address your router shows (placeholders below — documentation addresses such as `198.51.100.x` are refused as reserved):
 

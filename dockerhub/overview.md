@@ -36,40 +36,42 @@ docker run -d --name wanhound -p 127.0.0.1:8687:8687 \
 
 > The named volume keeps snapshots on the host, so the next run can diff against the last one. Replace `<your-public-ip>` with the address your router shows on its WAN interface (or any address you own and are authorized to test).
 
-Example output:
+Example output (abridged):
 
 ```
-WanHound audit — label "home", target 198.51.100.23
-Scanned 65535 ports in 1m48s: 3 open
+━━ 198.51.100.23 (IPv4) ━━
+Scanned 65535 TCP ports in 1m42s (timeout 412ms, rtt 66ms): 3 open · 0 closed · 65532 filtered
+Compared with 2026-10-23 09:00 (198.51.100.23):
+  NEW open TCP ports: 8291
 
-NEW open ports since last run: 8291
-
-[HIGH  ] 23/tcp  Telnet is exposed
-         evidence: banner=BusyBox shell (login)
-         Telnet sends everything, including passwords, in plaintext. Disable it ... (KH-001)
-[MEDIUM] 8291/tcp  MikroTik Winbox management is exposed
-         Winbox has a history of serious vulnerabilities. Restrict management to LAN/VPN ... (KH-021)
-[LOW   ] 443/tcp  A web service is reachable over HTTPS
-         evidence: tls cert CN="nas.home" SANs=[nas.home]
-         Check the certificate and title in the report to identify it. ... (KH-018)
+  PORT       SERVICE                    RISK    FINDING
+  80/tcp     Router / modem admin page  HIGH    A router or modem admin page is reachable from the internet
+  8291/tcp   MikroTik Winbox            HIGH    MikroTik Winbox management is exposed
+  51413/tcp  unknown                    LOW     Port 51413 is open and not in the known-service list
 ```
+
+Every finding carries its evidence (banner, certificate, page title), a confidence level, a plain-language explanation, one concrete piece of advice and a rule ID.
 
 ### Exit codes (for cron / alerting)
 
 | Code | Meaning |
 |---|---|
-| 0 | No high-risk findings |
+| 0 | No high-risk findings, nothing new |
 | 1 | A high-risk port is open, **or** new ports opened since the last snapshot |
-| 2 | The audit could not run (bad input, unauditable address class) |
+| 2 | The audit could not run (bad input, unauditable address, distorted vantage point) |
 
 ## What it does
 
-- **Full-port TCP audit** of a single IPv4 and/or IPv6 address (all 65,535 ports by default; a curated `--quick` set for fast re-checks). UPnP mappings and device services love random high ports, so the default does not stop at the top 1000.
+- **Full-port TCP audit** of a single IPv4 and/or IPv6 address (all 65,535 ports by default; a curated `--quick` set for fast re-checks; `--ports` for your own list). UPnP mappings and device services love random high ports, so the default does not stop at the top 1000.
+- **Adaptive, conservative pacing** — a short RTT calibration picks the per-connection timeout (a silent gateway does not stretch the audit), a pacer caps the connection rate, and scattered filtered ports get one slower retry pass. A full audit typically takes 1–3 minutes, and the expected worst case is printed before it starts.
 - **Three-state results** — `open` / `closed` / `filtered` are reported separately; silence is never dressed up as "safe".
-- **Service identification** — banner grab, TLS certificate, HTTP title/headers, so a finding says *what* answered, with the evidence attached.
-- **Plain-language risk findings** from a curated, versioned rule base (30+ home-relevant entries): Telnet, exposed databases, router management ports (including TR-069 on 7547), remote desktop, NAS panels, VPN endpoints… every finding carries a rule ID and one concrete piece of advice.
-- **Snapshot diff** — history is kept per *home label* (not per IP, because home addresses change). The next run calls out **newly opened ports** at the top of the report.
-- **Address sanity checks before scanning** — feed it a private or loopback address and it explains why that cannot be audited from outside; feed it a `100.64.0.0/10` address and it tells you you're behind carrier-grade NAT and there is no public IPv4 exposure to audit.
+- **Service identification** — banner grab, TLS certificate (issuer, expiry, self-signed), HTTP status/server/title over plain HTTP *and* TLS (following one same-origin redirect), so a finding says *what* answered, with the evidence attached and a confidence level.
+- **Plain-language risk findings** from a structured, versioned rule base (60+ entries): every rule is `match (port / banner / title / server / certificate / auth patterns) → risk, explanation, advice, rule ID`. Router and modem admin pages, cameras, NAS panels, hypervisor/container panels, databases, remote desktops, Telnet, TR-069, Winbox, SMB… `wanhound rules` lists them all.
+- **Whole-home combination rules** — router management reachable from the internet, databases/remote desktops published directly, "ten ports open: a DMZ host?", IPv6 hits with no NAT in front, smart-home devices on the street.
+- **Small UDP set** (DNS — including open-resolver detection —, NTP, IKE, OpenVPN, SSDP/UPnP, mDNS, WireGuard), clearly marked advisory.
+- **Snapshot diff** — history is kept per *home label* (not per IP, because home addresses change), address changes are reported as events, and the next run calls out **newly opened ports** at the top. Diffs are coverage-aware: a `--quick` re-check never "closes" the high ports a full audit found.
+- **Vantage-point self-checks before scanning** — private, loopback, CGNAT (`100.64.0.0/10`) and reserved addresses are refused with an explanation; if this machine's public egress *is* the target, or a transparent proxy / TUN-mode VPN is answering for every port, WanHound stops and tells you why instead of producing a distorted report.
+- **CLI + Web UI, one binary** — `wanhound scan` for scripts and cron (exit-code contract, JSON, standalone HTML report, optional Telegram push), `wanhound serve` for a password-gated web interface with live progress, history timeline and side-by-side diff.
 
 ## How it differs
 
@@ -97,9 +99,9 @@ WanHound is a **defensive self-audit tool**, in the same family as nmap or Green
 
 ## Roadmap
 
-- **P0 (current)** — dual-stack single-target audit, full/quick port sets, three-state engine, banner probing, rule base v1, snapshots + diff, exit-code contract, gated Web UI skeleton.
-- **P1** — adaptive timeouts and filtered-port retry, deeper TLS/HTTP identification, combination rules, UDP probe set, full Web UI (progress, history timeline, side-by-side diff).
-- **P2** — standalone HTML report export, Telegram push of results, optional import of an address list exported from LanHound (audited one by one — still no range scanning).
+- **P0 — done** — dual-stack single-target audit with address classification (CGNAT/private/reserved refusal), full/quick/custom port sets, adaptive timeouts, three-state engine, banner probing, structured rule base, terminal + JSON output, exit-code contract.
+- **P1 — done** — TLS/HTTP deep identification, combination rules, per-label snapshot diff, vantage-point self-checks, UDP probe set, Web UI with progress, report, history timeline and side-by-side diff, plus the full access-control set.
+- **P2 — partly done** — standalone HTML report export ✔, Telegram push ✔. Still open: importing an address list exported from LanHound (audited one by one — still no range scanning).
 
 ## License
 

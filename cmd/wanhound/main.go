@@ -1,7 +1,11 @@
 // WanHound — audit your own home network's public exposure.
 //
-//	wanhound scan  --ipv4 203.0.113.7 [--ipv6 2001:db8::7] [--label home]
-//	wanhound serve --addr 127.0.0.1:8687 --password <secret>
+//	wanhound scan    --ipv4 203.0.113.7 [--ipv6 2001:db8::7] [--label home]
+//	wanhound serve   --addr 127.0.0.1:8687  (password via WANHOUND_PASSWORD[_HASH])
+//	wanhound history [--label home]
+//	wanhound show    --label home [--id <snapshot>] [--html out.html]
+//	wanhound rules
+//	wanhound hash-password
 //
 // scan exit codes: 0 = no high-risk findings, 1 = high-risk finding
 // or newly opened ports vs the last snapshot, 2 = the audit itself
@@ -9,16 +13,22 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"sort"
+	"strings"
+	"syscall"
 	"time"
 
-	"github.com/playwjj/wanhound/internal/intel"
+	"github.com/playwjj/wanhound/internal/audit"
 	"github.com/playwjj/wanhound/internal/knowledge"
-	"github.com/playwjj/wanhound/internal/probe"
 	"github.com/playwjj/wanhound/internal/report"
 	"github.com/playwjj/wanhound/internal/scan"
 	"github.com/playwjj/wanhound/internal/store"
@@ -37,23 +47,30 @@ func main() {
 	switch os.Args[1] {
 	case "scan":
 		err = runScan(os.Args[2:])
-		if err != nil {
-			if code, ok := err.(exitError); ok {
-				os.Exit(int(code))
-			}
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(2)
-		}
 	case "serve":
 		err = runServe(os.Args[2:])
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(2)
-		}
+	case "history":
+		err = runHistory(os.Args[2:])
+	case "show":
+		err = runShow(os.Args[2:])
+	case "rules":
+		err = runRules()
+	case "hash-password":
+		err = runHashPassword()
+	case "version", "--version":
+		fmt.Println("wanhound", version, "· rules", knowledge.Version())
 	case "-h", "--help", "help":
 		usage()
 	default:
 		usage()
+		os.Exit(2)
+	}
+	if err != nil {
+		var code exitError
+		if errors.As(err, &code) {
+			os.Exit(int(code))
+		}
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
 	}
 }
@@ -66,193 +83,332 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `WanHound %s — audit your own home network's public exposure.
 
 Usage:
-  wanhound scan  --ipv4 <addr> [--ipv6 <addr>] [options]
-  wanhound serve --addr <host:port> --password <secret>
+  wanhound scan    --ipv4 <addr> [--ipv6 <addr>] [--label home] [--quick | --ports 22,80,8000-8100]
+  wanhound serve   [--addr 127.0.0.1:8687]   (WANHOUND_PASSWORD or WANHOUND_PASSWORD_HASH required)
+  wanhound history [--label <name>]
+  wanhound show    --label <name> [--id <snapshot-id>] [--json | --html <file>]
+  wanhound rules   list the built-in rule base
+  wanhound hash-password   read a password on stdin, print a hash for WANHOUND_PASSWORD_HASH
 
+Run "wanhound <command> -h" for options.
 Only audit addresses you own or are authorized to test.
 Run scan from OUTSIDE the network being audited (e.g. a VPS).
 `, version)
 }
 
-type scanFlags struct {
-	ipv4, ipv6  string
-	label       string
-	quick       bool
-	portsSpec   string
-	offline     bool
-	timeoutMS   int
-	concurrency int
-	dataDir     string
-	jsonOut     bool
-}
-
 func runScan(args []string) error {
 	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
-	var f scanFlags
-	fs.StringVar(&f.ipv4, "ipv4", "", "public IPv4 address to audit")
-	fs.StringVar(&f.ipv6, "ipv6", "", "public IPv6 address to audit")
-	fs.StringVar(&f.label, "label", "home", "snapshot label for this home (history/diff key)")
-	fs.BoolVar(&f.quick, "quick", false, "scan only the curated quick port set (default: all 65535)")
-	fs.StringVar(&f.portsSpec, "ports", "", "explicit port list, e.g. \"22,80,8000-8010\" (overrides --quick)")
-	fs.BoolVar(&f.offline, "offline", false, "no third-party lookups (address intel stays local)")
-	fs.IntVar(&f.timeoutMS, "timeout", 1000, "per-connection timeout, milliseconds")
-	fs.IntVar(&f.concurrency, "concurrency", 256, "max concurrent probes")
-	fs.StringVar(&f.dataDir, "data-dir", "", "snapshot directory (default: ~/.local/share/wanhound)")
-	fs.BoolVar(&f.jsonOut, "json", false, "print the machine-readable audit JSON instead of the table")
+	var (
+		req                     audit.Request
+		quick, noUDP, withUDP   bool
+		jsonOut                 bool
+		noColor, yes            bool
+		portsSpec, dataDir      string
+		htmlOut                 string
+		timeoutMS               int
+		tgToken, tgChat, notify string
+	)
+	fs.StringVar(&req.IPv4, "ipv4", "", "public IPv4 address to audit")
+	fs.StringVar(&req.IPv6, "ipv6", "", "public IPv6 address to audit")
+	fs.StringVar(&req.Label, "label", "home", "home label: history and diffs are kept per label, not per IP")
+	fs.BoolVar(&quick, "quick", false, "scan only the curated quick port set (default: all 65535)")
+	fs.StringVar(&portsSpec, "ports", "", "explicit port list, e.g. \"22,80,8000-8010\" (overrides --quick)")
+	fs.BoolVar(&noUDP, "no-udp", false, "skip the small home UDP probe set")
+	fs.BoolVar(&withUDP, "udp", false, "with --ports: also run the UDP probe set (on by default for full and quick scans)")
+	fs.BoolVar(&req.Offline, "offline", false, "no third-party lookups: no ASN/PTR profile, no egress self-check")
+	fs.IntVar(&timeoutMS, "timeout", 0, "per-connection timeout in ms (default: adaptive from measured RTT)")
+	fs.IntVar(&req.Concurrency, "concurrency", scan.DefaultConcurrency, "max concurrent connection attempts")
+	fs.IntVar(&req.Rate, "rate", scan.DefaultRate, "max new connections per second")
+	fs.BoolVar(&req.NoRetry, "no-retry", false, "skip the slower second pass over scattered filtered ports")
+	fs.StringVar(&dataDir, "data-dir", envOr("WANHOUND_DATA", ""), "snapshot directory (default ~/.local/share/wanhound)")
+	fs.BoolVar(&jsonOut, "json", false, "print the machine-readable audit JSON instead of the report")
+	fs.StringVar(&htmlOut, "html", "", "also write a standalone HTML report to this file")
+	fs.BoolVar(&noColor, "no-color", false, "disable colored output")
+	fs.BoolVar(&yes, "yes", false, "continue even if this machine looks like it is inside the target network")
+	fs.BoolVar(&req.Lab, "lab", false, "test bench only: allow loopback/private targets")
+	fs.StringVar(&tgToken, "telegram-token", os.Getenv("WANHOUND_TELEGRAM_TOKEN"), "Telegram bot token for a result push")
+	fs.StringVar(&tgChat, "telegram-chat", os.Getenv("WANHOUND_TELEGRAM_CHAT"), "Telegram chat ID for a result push")
+	fs.StringVar(&notify, "notify", "alert", "when to push to Telegram: alert (exit code 1) | always")
 	if err := fs.Parse(args); err != nil {
 		return exitError(2)
 	}
-	if f.ipv4 == "" && f.ipv6 == "" {
-		fmt.Fprintln(os.Stderr, "scan: provide at least one of --ipv4 / --ipv6")
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "scan: unexpected argument %q (WanHound audits one --ipv4 and/or one --ipv6 address)\n", fs.Arg(0))
 		return exitError(2)
 	}
-
-	ports, err := choosePorts(f)
-	if err != nil {
+	req.UDP = !noUDP
+	req.AcceptInside = yes
+	req.Timeout = time.Duration(timeoutMS) * time.Millisecond
+	switch {
+	case portsSpec != "":
+		ports, err := scan.ParsePorts(portsSpec)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "scan:", err)
+			return exitError(2)
+		}
+		req.PortSet, req.Ports = "custom", ports
+		req.UDP = withUDP && !noUDP // custom lists: UDP only when asked
+	case quick:
+		req.PortSet = "quick"
+	default:
+		req.PortSet = "full"
+	}
+	if err := req.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, "scan:", err)
 		return exitError(2)
 	}
-	st, err := store.Open(f.dataDir)
+	st, err := store.Open(dataDir)
 	if err != nil {
 		return err
 	}
 
-	targets := []struct{ name, addr string }{{"ipv4", f.ipv4}, {"ipv6", f.ipv6}}
-	scanned := 0
-	worst := 0
-	for _, t := range targets {
-		if t.addr == "" {
-			continue
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	tty := isTerminal(os.Stderr)
+	rep, err := audit.Run(ctx, st, req, audit.Hooks{
+		Progress:      progressPrinter(tty),
+		ConfirmInside: confirmInside,
+	})
+	if tty {
+		fmt.Fprint(os.Stderr, "\r\033[K")
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "scan cancelled; nothing saved")
+			return exitError(2)
 		}
-		code, err := auditOne(st, f, t.addr, ports)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "scan %s: %v\n", t.addr, err)
-			continue
-		}
-		scanned++
-		if code > worst {
-			worst = code
+		return err
+	}
+
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(rep)
+	} else {
+		report.Print(os.Stdout, rep, !noColor && os.Getenv("NO_COLOR") == "" && isTerminal(os.Stdout))
+	}
+	if htmlOut != "" {
+		if err := writeHTML(htmlOut, rep); err != nil {
+			fmt.Fprintln(os.Stderr, "html:", err)
+		} else if !jsonOut {
+			fmt.Fprintln(os.Stderr, "HTML report written to", htmlOut)
 		}
 	}
-	if scanned == 0 {
+	if tgToken != "" && tgChat != "" && (notify == "always" || rep.ExitCode == 1) {
+		if err := sendTelegram(ctx, tgToken, tgChat, report.Summary(rep)); err != nil {
+			fmt.Fprintln(os.Stderr, "telegram:", err)
+		}
+	}
+	return exitError(rep.ExitCode)
+}
+
+func writeHTML(path string, rep *audit.Report) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := report.HTML(f, rep); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func progressPrinter(tty bool) func(audit.Event) {
+	lastPct := -1
+	return func(e audit.Event) {
+		switch {
+		case e.Stage == "done":
+		case e.Message != "":
+			if tty {
+				fmt.Fprint(os.Stderr, "\r\033[K")
+			}
+			fmt.Fprintf(os.Stderr, "%s: %s\n", e.Target, e.Message)
+			lastPct = -1
+		case e.Stage == "tcp" && e.Total > 0:
+			pct := e.Done * 100 / e.Total
+			if tty {
+				fmt.Fprintf(os.Stderr, "\r\033[K%s: %3d%%  %d/%d", e.Target, pct, e.Done, e.Total)
+			} else if pct/10 != lastPct/10 {
+				fmt.Fprintf(os.Stderr, "%s: %d%%\n", e.Target, pct)
+			}
+			lastPct = pct
+		}
+	}
+}
+
+func confirmInside(target, why string) bool {
+	fmt.Fprintf(os.Stderr, "\nwarning: %s — %s.\n", target, why)
+	if !isTerminal(os.Stdin) {
+		fmt.Fprintln(os.Stderr, "Not a terminal: refusing to continue (pass --yes to override).")
+		return false
+	}
+	fmt.Fprint(os.Stderr, "Results from inside are distorted. Continue anyway? [y/N] ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+func runHistory(args []string) error {
+	fs := flag.NewFlagSet("history", flag.ContinueOnError)
+	label := fs.String("label", "", "show snapshots for this label (default: list labels)")
+	dataDir := fs.String("data-dir", envOr("WANHOUND_DATA", ""), "snapshot directory")
+	if err := fs.Parse(args); err != nil {
 		return exitError(2)
 	}
-	return exitError(worst)
+	st, err := store.Open(*dataDir)
+	if err != nil {
+		return err
+	}
+	if *label == "" {
+		labels, err := st.Labels()
+		if err != nil {
+			return err
+		}
+		if len(labels) == 0 {
+			fmt.Println("No snapshots yet. Run: wanhound scan --ipv4 <addr> --label home")
+		}
+		for _, l := range labels {
+			snaps, _ := st.List(l)
+			fmt.Printf("%-24s %d snapshot(s)\n", l, len(snaps))
+		}
+		return nil
+	}
+	snaps, err := st.List(*label)
+	if err != nil {
+		return err
+	}
+	for _, s := range snaps {
+		m := store.MetaOf(s)
+		line := fmt.Sprintf("%s  %-28s IP%s %-40s %-6s open=%-3d worst=%-6s", m.Time.Local().Format("2006-01-02 15:04"), m.ID, m.Family, m.IP, m.PortSet, m.Counts.Open, m.MaxRisk)
+		if m.IPChange != "" {
+			line += "  address " + m.IPChange
+		}
+		if len(m.Opened) > 0 {
+			line += "  NEW " + report.JoinInts(m.Opened)
+		}
+		if len(m.Closed) > 0 {
+			line += "  closed " + report.JoinInts(m.Closed)
+		}
+		fmt.Println(line)
+	}
+	return nil
 }
 
-// auditOne audits a single address and returns its exit code.
-func auditOne(st *store.Store, f scanFlags, addr string, ports []int) (int, error) {
-	_, class, err := intel.Classify(addr)
+func runShow(args []string) error {
+	fs := flag.NewFlagSet("show", flag.ContinueOnError)
+	label := fs.String("label", "home", "label")
+	id := fs.String("id", "", "snapshot ID (default: latest)")
+	jsonOut := fs.Bool("json", false, "print the snapshot JSON")
+	htmlOut := fs.String("html", "", "write a standalone HTML report to this file")
+	dataDir := fs.String("data-dir", envOr("WANHOUND_DATA", ""), "snapshot directory")
+	if err := fs.Parse(args); err != nil {
+		return exitError(2)
+	}
+	st, err := store.Open(*dataDir)
 	if err != nil {
-		return 2, err
+		return err
 	}
-	if ok, why := intel.Scannable(class); !ok {
-		fmt.Fprintf(os.Stderr, "%s: not auditing — %s\n", addr, why)
-		return 2, fmt.Errorf("address class %s is not auditable", class)
-	}
-	// TODO(P1): egress self-check — if this machine's public egress
-	// equals the target, warn that NAT hairpin may distort results.
-	// TODO(P1): optional online intel (ASN/ISP) unless --offline.
-
-	opts := scan.Options{
-		Ports:       ports,
-		Concurrency: f.concurrency,
-		Timeout:     time.Duration(f.timeoutMS) * time.Millisecond,
-	}
-	lastPct := -1
-	progress := func(done, total int) {
-		pct := done * 100 / total
-		if pct/10 != lastPct/10 {
-			lastPct = pct
-			fmt.Fprintf(os.Stderr, "\r%s: scanning… %d%%", addr, pct)
-		}
-	}
-	res := scan.Scan(context.Background(), addr, opts, progress)
-	fmt.Fprintln(os.Stderr)
-
-	// Identify services on open ports and map to findings.
-	evidence := map[int]string{}
-	var probes []probe.Info
-	var findings []knowledge.Finding
-	for _, pr := range res.Open() {
-		info := probe.Probe(addr, pr.Port, 2*time.Second)
-		probes = append(probes, info)
-		ev := evidenceOf(info)
-		evidence[pr.Port] = ev
-		findings = append(findings, knowledge.Lookup(pr.Port, ev)...)
-	}
-	knowledge.SortFindings(findings)
-
-	snap := store.FromScan(f.label, res, probes)
-	prev, err := st.Latest(f.label + "-" + addrFamily(addr))
-	if err != nil {
-		return 2, err
-	}
-	ch := store.Diff(prev, snap)
-	if err := st.Save(withKey(snap, f.label+"-"+addrFamily(addr))); err != nil {
-		return 2, err
-	}
-
-	if f.jsonOut {
-		out := map[string]any{
-			"label": f.label, "ip": addr, "time": snap.Time,
-			"open": snap.Open, "findings": findings, "changes": ch,
-		}
-		data, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(data))
+	var snap *store.Snapshot
+	if *id != "" {
+		snap, err = st.Get(*label, *id)
 	} else {
-		report.Print(os.Stdout, f.label, res, findings, evidence, ch, prev != nil)
+		var all []*store.Snapshot
+		all, err = st.List(*label)
+		if len(all) > 0 {
+			snap = all[len(all)-1]
+		}
 	}
-	return report.ExitCode(findings, ch), nil
-}
-
-// Snapshots are keyed label+family so the v4 and v6 histories of the
-// same home do not clobber each other.
-func addrFamily(addr string) string {
-	if ip, _, err := intel.Classify(addr); err == nil && ip.To4() == nil {
-		return "v6"
+	if err != nil {
+		return err
 	}
-	return "v4"
-}
-
-func withKey(snap store.Snapshot, key string) store.Snapshot {
-	snap.Label = key
-	return snap
-}
-
-func evidenceOf(info probe.Info) string {
+	if snap == nil {
+		return fmt.Errorf("no snapshots under label %q", *label)
+	}
+	rep := &audit.Report{Label: snap.Label, Started: snap.Time, Duration: snap.Duration,
+		RulesVersion: snap.RulesVersion, Targets: []*store.Snapshot{snap}, Offline: snap.Intel == nil}
 	switch {
-	case info.Title != "":
-		return fmt.Sprintf("title=%q server=%q", info.Title, info.Server)
-	case info.TLS:
-		return fmt.Sprintf("tls cert CN=%q SANs=%v", info.CertCN, info.CertSANs)
-	case info.Banner != "":
-		return "banner=" + info.Banner
+	case *htmlOut != "":
+		return writeHTML(*htmlOut, rep)
+	case *jsonOut:
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(snap)
 	default:
-		return ""
+		report.Print(os.Stdout, rep, os.Getenv("NO_COLOR") == "" && isTerminal(os.Stdout))
 	}
+	return nil
 }
 
-func choosePorts(f scanFlags) ([]int, error) {
-	if f.portsSpec != "" {
-		return scan.ParsePorts(f.portsSpec)
+func runRules() error {
+	fmt.Printf("WanHound rule base %s\n\n", knowledge.Version())
+	for _, r := range knowledge.Rules() {
+		m := r.Match
+		cond := m.Proto
+		if len(m.Ports) > 0 {
+			cond += " " + report.JoinInts(m.Ports)
+		} else {
+			cond += " any port"
+		}
+		var ev []string
+		for k, v := range map[string]string{"banner": m.Banner, "title": m.Title, "server": m.Server, "cert": m.Cert, "auth": m.Auth, "detail": m.Detail, "any": m.Any} {
+			if v != "" {
+				ev = append(ev, k)
+			}
+		}
+		sort.Strings(ev)
+		if m.HTTP != nil && *m.HTTP {
+			ev = append(ev, "http")
+		}
+		if m.TLS != nil {
+			ev = append(ev, fmt.Sprintf("tls=%v", *m.TLS))
+		}
+		if len(ev) > 0 {
+			cond += " + " + strings.Join(ev, ",")
+		}
+		fmt.Printf("%-7s %-7s %-34s %s\n", r.ID, r.Risk, cond, r.Title)
 	}
-	if f.quick {
-		return scan.QuickPorts, nil
+	return nil
+}
+
+func runHashPassword() error {
+	fmt.Fprint(os.Stderr, "Password (read from stdin): ")
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return err
 	}
-	return scan.FullPorts(), nil
+	pw := strings.TrimRight(line, "\r\n")
+	if len(pw) < 10 {
+		return fmt.Errorf("use at least 10 characters")
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Println(web.HashPassword(pw))
+	return nil
 }
 
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	var addr, password string
-	fs.StringVar(&addr, "addr", "127.0.0.1:8687", "listen address")
-	fs.StringVar(&password, "password", "", "access password (required; or WANHOUND_PASSWORD)")
+	var o web.Options
+	fs.StringVar(&o.Addr, "addr", "127.0.0.1:8687", "listen address")
+	fs.StringVar(&o.DataDir, "data-dir", envOr("WANHOUND_DATA", ""), "snapshot + audit-log directory")
+	fs.IntVar(&o.ScansPerHour, "scans-per-hour", 6, "global cap on audits started per hour")
+	fs.BoolVar(&o.Lab, "lab", false, "test bench only: allow loopback/private targets")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return exitError(2)
 	}
-	if password == "" {
-		password = os.Getenv("WANHOUND_PASSWORD")
-	}
-	return web.Serve(web.Options{Addr: addr, Password: password})
+	o.Password = os.Getenv("WANHOUND_PASSWORD")
+	o.PasswordHash = os.Getenv("WANHOUND_PASSWORD_HASH")
+	o.Version = version
+	return web.Serve(o)
 }

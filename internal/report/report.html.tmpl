@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WanHound report — {{.Label}}</title>
+<style>
+:root { --bg:#f6f8fb; --card:#fff; --ink:#12355B; --muted:#5b6b7f; --line:#dde4ec;
+  --high:#c62828; --medium:#b26a00; --low:#1565c0; --info:#607080; --ok:#2e7d32; --accent:#F59E0B; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0f1720; --card:#17212c; --ink:#e3ebf3; --muted:#93a4b6;
+  --line:#2a3846; --high:#ef5350; --medium:#ffb74d; --low:#64b5f6; --info:#90a4ae; --ok:#81c784; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+main { max-width:960px; margin:0 auto; padding:24px 16px 48px; }
+h1 { margin:0 0 4px; font-size:24px; } h1 span { color:var(--accent); }
+h2 { font-size:18px; margin:0 0 8px; } .muted { color:var(--muted); } .small { font-size:13px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin:16px 0; }
+table { width:100%; border-collapse:collapse; font-size:14px; } th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:600; } code { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; word-break:break-all; }
+.badge { display:inline-block; min-width:62px; text-align:center; border-radius:999px; padding:1px 8px; font-size:12px; font-weight:700; color:#fff; }
+.high { background:var(--high); } .medium { background:var(--medium); } .low { background:var(--low); } .info,.none { background:var(--info); }
+.finding { border-left:4px solid var(--line); padding:8px 12px; margin:10px 0; }
+.finding.f-high { border-color:var(--high); } .finding.f-medium { border-color:var(--medium); } .finding.f-low { border-color:var(--low); }
+.finding p { margin:4px 0; } .k { color:var(--muted); display:inline-block; min-width:72px; }
+.new { color:var(--high); font-weight:700; } .gone { color:var(--ok); } .warn { color:var(--medium); }
+footer { margin-top:24px; font-size:13px; color:var(--muted); }
+.scroll { overflow-x:auto; }
+</style>
+</head>
+<body><main>
+<h1>Wan<span>Hound</span> audit — {{.Label}}</h1>
+<div class="muted">{{when .Started}} · took {{dur .Duration}} · rules {{.RulesVersion}}</div>
+
+{{range .Errors}}<div class="card"><h2 class="warn">Not audited: {{.IP}}</h2><p>{{.Reason}}</p></div>{{end}}
+
+{{range .Targets}}
+<div class="card">
+  <h2>{{.IP}} <span class="muted small">IP{{.Family}}</span> <span class="badge {{maxrisk .Findings}}">{{upper (maxrisk .Findings)}}</span></h2>
+  {{with .Intel}}<div class="muted small">{{.ASN}} {{.Org}} {{.Country}}{{range .PTR}} · ptr {{.}}{{end}}{{if .Source}} · via {{.Source}}{{end}}</div>
+  {{range .Hints}}<p class="warn small">! {{.}}</p>{{end}}{{end}}
+  <p><b>{{.Counts.Open}}</b> open · {{.Counts.Closed}} closed · {{.Counts.Filtered}} filtered — {{.PortSet}} scan, timeout {{ms .Timeout}}</p>
+  {{with .Changes}}
+    <p class="small">Compared with {{when .PrevTime}} ({{.PrevIP}}):
+    {{if .IPChanged}}<span class="warn">address changed — compare with care.</span>{{end}}
+    {{if .Opened}}<span class="new">NEW open: {{ints .Opened}}.</span>{{end}}
+    {{if .UDPOpened}}<span class="new">NEW UDP: {{ints .UDPOpened}}.</span>{{end}}
+    {{if .Closed}}<span class="gone">No longer open: {{ints .Closed}}.</span>{{end}}
+    {{range .Changed}}<br>{{.Port}}/tcp changed: <code>{{.Before}}</code> → <code>{{.After}}</code>{{end}}
+    {{if .Coverage}}<br><span class="muted">{{.Coverage}}</span>{{end}}</p>
+  {{else}}<p class="small muted">First run for this label: this is the baseline.</p>{{end}}
+
+  {{if .Open}}<div class="scroll"><table>
+    <tr><th>Port</th><th>Identification</th></tr>
+    {{range .Open}}<tr><td>{{.Port}}/tcp</td><td><code>{{.Evidence}}</code></td></tr>{{end}}
+  </table></div>{{end}}
+  {{if .UDP}}<p class="small muted">UDP (advisory): {{range $i, $u := .UDP}}{{if $i}} · {{end}}{{$u.Port}} {{$u.State}}{{end}}</p>{{end}}
+
+  {{range .Findings}}
+  <div class="finding f-{{risk .Risk}}">
+    <p><span class="badge {{risk .Risk}}">{{upper (risk .Risk)}}</span> <b>{{where .}}</b> — <b>{{.Title}}</b> <span class="muted small">{{.RuleID}}{{if .Confidence}}, confidence {{conf .Confidence}}{{end}}</span></p>
+    {{if .Evidence}}<p class="small"><span class="k">Evidence</span><code>{{.Evidence}}</code></p>{{end}}
+    <p><span class="k">What</span>{{.Explain}}</p>
+    <p><span class="k">Do</span>{{.Advice}}</p>
+  </div>
+  {{else}}<p class="gone">Nothing answered. From this vantage point, nothing is exposed.</p>{{end}}
+
+  {{if .Notes}}<ul class="small muted">{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  <p class="small muted">Source (scanner egress): {{if .Egress}}{{.Egress}}{{else}}not checked{{end}} · ports {{spec .Scanned}} · snapshot {{.ID}}</p>
+</div>
+{{end}}
+<footer>Generated by WanHound — a self-audit of your own home network's public exposure. Only audit addresses you own or are authorized to test. Findings are based on what answered from one vantage point; "filtered" is not proof of safety.</footer>
+</main></body></html>

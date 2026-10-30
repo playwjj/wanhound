@@ -1,10 +1,13 @@
 GO ?= go
 BIN := wanhound
 
-.PHONY: build test vet fmt run docker
+.PHONY: build build-linux test vet fmt run docker testbed
 
 build:
 	$(GO) build -trimpath -o $(BIN) ./cmd/wanhound
+
+build-linux:
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN)-linux-amd64 ./cmd/wanhound
 
 test:
 	$(GO) test ./...
@@ -16,7 +19,12 @@ fmt:
 	$(GO) fmt ./...
 
 run: build
-	./$(BIN) scan --ipv4 203.0.113.7 --quick --label example
+	./$(BIN) scan --lab --offline --ipv4 127.0.0.1 --quick --label example
 
 docker:
 	docker build -t wanhound .
+
+# Acceptance bench (Linux + Docker): known open/closed/filtered states,
+# rule hits, UDP results and the diff/exit-code contract.
+testbed: build-linux
+	scripts/testbed.sh ./$(BIN)-linux-amd64

@@ -1,21 +1,33 @@
 // Package knowledge maps scan evidence to plain-language findings
 // using a curated, versioned rule base (rules.json, embedded).
 //
+// Every rule has the same shape: a match condition (protocol, port
+// list, and optional evidence patterns — banner, HTTP title/server,
+// TLS certificate, auth challenge) → risk, explanation, advice and a
+// stable rule ID. Reports cite the ID so a reader can trace exactly
+// why the report said what it said.
+//
 // Rules are deliberately conservative: a finding states what the
 // evidence supports ("a database port is reachable"), never a
-// vulnerability claim. Every finding carries its rule ID so a reader
-// can trace exactly why the report said what it said.
+// vulnerability claim. Rules sharing a group are alternatives for
+// the same port: the first match in file order wins, so specific
+// evidence rules come before port-number fallbacks.
 //
-// TODO(P1): refine matches with banner substrings, TLS presence and
-// HTTP title keywords; combination rules (e.g. "management interface
-// + home profile" escalation).
+// Combination rules (KC-*) then look at a target's findings as a
+// whole — router management exposed, databases on a home line, many
+// open ports (DMZ host?), IPv6 hits with no NAT in front.
 package knowledge
 
 import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
+
+	"github.com/playwjj/wanhound/internal/probe"
+	"github.com/playwjj/wanhound/internal/scan"
 )
 
 // Risk ranks findings. Higher is worse.
@@ -41,95 +53,376 @@ func (r Risk) String() string {
 	}
 }
 
-func parseRisk(s string) Risk {
+func (r Risk) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
+
+func (r *Risk) UnmarshalText(b []byte) error {
+	v, ok := parseRisk(string(b))
+	if !ok {
+		return fmt.Errorf("unknown risk %q", b)
+	}
+	*r = v
+	return nil
+}
+
+func parseRisk(s string) (Risk, bool) {
 	switch s {
 	case "high":
-		return RiskHigh
+		return RiskHigh, true
 	case "medium":
-		return RiskMedium
+		return RiskMedium, true
 	case "low":
-		return RiskLow
-	default:
-		return RiskInfo
+		return RiskLow, true
+	case "info":
+		return RiskInfo, true
 	}
+	return RiskInfo, false
 }
 
-// Rule is one knowledge-base entry.
+// Match is a rule's condition. All present fields must hold. String
+// fields are regular expressions; "Any" is matched against all the
+// identifying text at once (banner, HTTP title/server/auth, TLS names).
+type Match struct {
+	Proto      string `json:"proto,omitempty"` // "tcp" (default) or "udp"
+	Ports      []int  `json:"ports,omitempty"` // empty = any port
+	Banner     string `json:"banner,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Server     string `json:"server,omitempty"`
+	Cert       string `json:"cert,omitempty"` // TLS CN, SANs, issuer
+	Auth       string `json:"auth,omitempty"` // WWW-Authenticate
+	Detail     string `json:"detail,omitempty"`
+	Any        string `json:"any,omitempty"`
+	HTTP       *bool  `json:"http,omitempty"`
+	TLS        *bool  `json:"tls,omitempty"`
+	TLSExpired *bool  `json:"tls_expired,omitempty"`
+	SelfSigned *bool  `json:"self_signed,omitempty"`
+
+	re map[string]*regexp.Regexp
+}
+
+// Rule is one knowledge-base entry for a single port/service.
 type Rule struct {
+	ID      string   `json:"id"`
+	Group   string   `json:"group"`
+	Service string   `json:"service"`
+	Risk    string   `json:"risk"`
+	Title   string   `json:"title"`
+	Explain string   `json:"explain"`
+	Advice  string   `json:"advice"`
+	Tags    []string `json:"tags,omitempty"`
+	Match   Match    `json:"match"`
+}
+
+// Combo is a whole-target rule evaluated over the port findings.
+type Combo struct {
 	ID      string `json:"id"`
-	Port    int    `json:"port"`
-	Service string `json:"service"`
 	Risk    string `json:"risk"`
 	Title   string `json:"title"`
+	Explain string `json:"explain"`
 	Advice  string `json:"advice"`
+	When    struct {
+		TagsAny []string `json:"tags_any,omitempty"`
+		Family  string   `json:"family,omitempty"`   // "v4" | "v6"
+		MinOpen int      `json:"min_open,omitempty"` // open TCP ports
+	} `json:"when"`
 }
 
-// Finding is a rule matched against one open port, with the evidence
-// that triggered it.
+// Base is the whole rule base.
+type Base struct {
+	Version string  `json:"version"`
+	Rules   []Rule  `json:"rules"`
+	Combos  []Combo `json:"combos"`
+}
+
+// Finding is a rule matched against one open port (Port 0 = a
+// whole-target combination finding), with the evidence behind it.
 type Finding struct {
 	RuleID  string `json:"rule_id"`
-	Port    int    `json:"port"`
+	Port    int    `json:"port,omitempty"`
+	Proto   string `json:"proto,omitempty"`
 	Service string `json:"service"`
 	Risk    Risk   `json:"risk"`
 	Title   string `json:"title"`
+	Explain string `json:"explain"`
 	Advice  string `json:"advice"`
-	// Evidence is the probe output (banner, TLS CN, HTTP title) that
-	// supports the finding; may be empty.
+	// Evidence is the probe output (banner, TLS names, HTTP title)
+	// that supports the finding; may be empty.
 	Evidence string `json:"evidence,omitempty"`
+	// Confidence: "high" when identifying evidence (banner, title,
+	// certificate…) matched, "medium" when only the protocol was
+	// recognized (it speaks HTTP/TLS), "low" for port number alone.
+	Confidence string   `json:"confidence,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
 }
 
 //go:embed rules.json
 var rulesJSON []byte
 
-var rules []Rule
+var base Base
 
 func init() {
-	if err := json.Unmarshal(rulesJSON, &rules); err != nil {
+	b, err := Parse(rulesJSON)
+	if err != nil {
 		panic(fmt.Sprintf("knowledge: built-in rules.json is invalid: %v", err))
 	}
+	base = *b
 }
 
-// Rules returns the loaded rule base (for reporting/tests).
-func Rules() []Rule { return rules }
-
-// Lookup returns findings for one open port. evidence is free-form
-// probe output attached to any finding. Unmatched ports return a
-// generic informational finding — an unknown open port on a home
-// gateway is always worth a human look.
-func Lookup(port int, evidence string) []Finding {
-	var out []Finding
-	for _, r := range rules {
-		if r.Port == port {
-			out = append(out, Finding{
-				RuleID:   r.ID,
-				Port:     port,
-				Service:  r.Service,
-				Risk:     parseRisk(r.Risk),
-				Title:    r.Title,
-				Advice:   r.Advice,
-				Evidence: evidence,
-			})
+// Parse loads and validates a rule base.
+func Parse(data []byte) (*Base, error) {
+	var b Base
+	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, err
+	}
+	if b.Version == "" {
+		return nil, fmt.Errorf("missing version")
+	}
+	seen := map[string]bool{}
+	for i := range b.Rules {
+		r := &b.Rules[i]
+		if r.ID == "" || seen[r.ID] {
+			return nil, fmt.Errorf("rule %d: missing or duplicate id %q", i, r.ID)
+		}
+		seen[r.ID] = true
+		if _, ok := parseRisk(r.Risk); !ok {
+			return nil, fmt.Errorf("%s: bad risk %q", r.ID, r.Risk)
+		}
+		if r.Group == "" || r.Title == "" || r.Explain == "" || r.Advice == "" {
+			return nil, fmt.Errorf("%s: group, title, explain and advice are required", r.ID)
+		}
+		m := &r.Match
+		if m.Proto == "" {
+			m.Proto = "tcp"
+		}
+		if m.Proto != "tcp" && m.Proto != "udp" {
+			return nil, fmt.Errorf("%s: bad proto %q", r.ID, m.Proto)
+		}
+		m.re = map[string]*regexp.Regexp{}
+		for k, v := range map[string]string{"banner": m.Banner, "title": m.Title, "server": m.Server, "cert": m.Cert, "auth": m.Auth, "detail": m.Detail, "any": m.Any} {
+			if v == "" {
+				continue
+			}
+			re, err := regexp.Compile(v)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %s: %v", r.ID, k, err)
+			}
+			m.re[k] = re
+		}
+		if len(m.Ports) == 0 && len(m.re) == 0 && m.HTTP == nil && m.TLS == nil && m.TLSExpired == nil && m.SelfSigned == nil {
+			return nil, fmt.Errorf("%s: match has no condition", r.ID)
 		}
 	}
-	if len(out) == 0 {
+	for _, c := range b.Combos {
+		if c.ID == "" || seen[c.ID] {
+			return nil, fmt.Errorf("combo: missing or duplicate id %q", c.ID)
+		}
+		seen[c.ID] = true
+		if _, ok := parseRisk(c.Risk); !ok {
+			return nil, fmt.Errorf("%s: bad risk %q", c.ID, c.Risk)
+		}
+	}
+	return &b, nil
+}
+
+// Version is the embedded rule base version.
+func Version() string { return base.Version }
+
+// Rules returns the loaded rule base (for reporting/tests).
+func Rules() []Rule { return base.Rules }
+
+// Target is everything the rule base looks at for one address.
+type Target struct {
+	Family string       // "v4" or "v6"
+	TCP    []probe.Info // one per open TCP port
+	UDP    []scan.UDPResult
+}
+
+// Evaluate returns all findings for a target, worst first.
+func Evaluate(t Target) []Finding { return base.Evaluate(t) }
+
+// Evaluate runs this rule base against t.
+func (b *Base) Evaluate(t Target) []Finding {
+	var out []Finding
+	for _, info := range t.TCP {
+		out = append(out, b.lookup("tcp", info.Port, facts(info))...)
+	}
+	for _, u := range t.UDP {
+		if u.State != scan.UDPOpen {
+			continue // open|filtered is advisory only; closed is fine
+		}
+		out = append(out, b.lookup("udp", u.Port, evidence{detail: u.Detail, text: u.Detail})...)
+	}
+	out = append(out, b.combos(t, out)...)
+	SortFindings(out)
+	return out
+}
+
+// evidence is the flattened, matchable view of a probe.
+type evidence struct {
+	banner, title, server, cert, auth, detail string
+	http, tls, expired, selfSigned            bool
+	text                                      string // all of the above, for "any"
+	summary                                   string
+}
+
+func facts(i probe.Info) evidence {
+	e := evidence{banner: i.Banner, summary: i.Evidence()}
+	if h := i.HTTP; h != nil {
+		e.http = true
+		e.title = h.Title
+		e.server = strings.TrimSpace(h.Server + " " + h.PoweredBy)
+		e.auth = h.AuthRealm
+		e.tls = h.HTTPSOnly // a TLS port that refused our SNI-less handshake
+	}
+	if t := i.TLS; t != nil {
+		e.tls = true
+		e.cert = strings.Join(append([]string{t.CN, t.Issuer}, t.SANs...), " ")
+		e.expired = t.Expired
+		e.selfSigned = t.SelfSigned
+	}
+	e.text = strings.Join([]string{e.banner, e.title, e.server, e.auth, e.cert}, " | ")
+	return e
+}
+
+func (b *Base) lookup(proto string, port int, ev evidence) []Finding {
+	var out []Finding
+	taken := map[string]bool{}
+	for i := range b.Rules {
+		r := &b.Rules[i]
+		if taken[r.Group] || r.Match.Proto != proto {
+			continue
+		}
+		conf, ok := r.Match.matches(port, ev)
+		if !ok {
+			continue
+		}
+		taken[r.Group] = true
+		risk, _ := parseRisk(r.Risk)
 		out = append(out, Finding{
-			RuleID:   "KH-000",
-			Port:     port,
-			Service:  "unknown",
-			Risk:     RiskLow,
-			Title:    fmt.Sprintf("Port %d is open and not in the known-service list", port),
-			Advice:   "If you did not open this deliberately, check the router for an unexpected port forward or a UPnP mapping created by a device or app.",
-			Evidence: evidence,
+			RuleID: r.ID, Port: port, Proto: proto, Service: r.Service,
+			Risk: risk, Title: r.Title, Explain: r.Explain, Advice: r.Advice,
+			Evidence: ev.summary, Confidence: conf, Tags: r.Tags,
+		})
+	}
+	if len(out) == 0 && proto == "tcp" {
+		conf := "low"
+		if ev.summary != "" {
+			conf = "medium"
+		}
+		out = append(out, Finding{
+			RuleID: "KH-000", Port: port, Proto: proto, Service: "unknown", Risk: RiskLow,
+			Title:      fmt.Sprintf("Port %d is open and not in the known-service list", port),
+			Explain:    "Something answers on this port, but WanHound does not recognize it. Unknown high ports are often UPnP mappings that a device or app created for itself.",
+			Advice:     "If you did not open this deliberately, check the router for an unexpected port forward, DMZ host or UPnP mapping, and turn UPnP off if nothing needs it.",
+			Evidence:   ev.summary,
+			Confidence: conf,
 		})
 	}
 	return out
 }
 
-// SortFindings orders findings worst-first, then by port.
+func (m *Match) matches(port int, ev evidence) (confidence string, ok bool) {
+	if len(m.Ports) > 0 {
+		found := false
+		for _, p := range m.Ports {
+			if p == port {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", false
+		}
+	}
+	checks := map[string]string{"banner": ev.banner, "title": ev.title, "server": ev.server, "cert": ev.cert, "auth": ev.auth, "detail": ev.detail, "any": ev.text}
+	for k, re := range m.re {
+		if !re.MatchString(checks[k]) {
+			return "", false
+		}
+	}
+	for _, c := range []struct {
+		want *bool
+		got  bool
+	}{{m.HTTP, ev.http}, {m.TLS, ev.tls}, {m.TLSExpired, ev.expired}, {m.SelfSigned, ev.selfSigned}} {
+		if c.want != nil && *c.want != c.got {
+			return "", false
+		}
+	}
+	switch {
+	case len(m.re) > 0 || m.TLSExpired != nil || m.SelfSigned != nil:
+		return "high", true
+	case m.HTTP != nil || m.TLS != nil:
+		return "medium", true
+	default:
+		return "low", true
+	}
+}
+
+func (b *Base) combos(t Target, fs []Finding) []Finding {
+	tags := map[string][]int{}
+	for _, f := range fs {
+		for _, tag := range f.Tags {
+			tags[tag] = append(tags[tag], f.Port)
+		}
+	}
+	var out []Finding
+	for _, c := range b.Combos {
+		w := c.When
+		if w.Family != "" && w.Family != t.Family {
+			continue
+		}
+		if w.MinOpen > 0 && len(t.TCP) < w.MinOpen {
+			continue
+		}
+		var ports []int
+		if len(w.TagsAny) > 0 {
+			for _, tag := range w.TagsAny {
+				ports = append(ports, tags[tag]...)
+			}
+			if len(ports) == 0 {
+				continue
+			}
+		}
+		if w.Family != "" && w.MinOpen == 0 && len(w.TagsAny) == 0 && len(t.TCP) == 0 {
+			continue // a family-only combo needs at least one open port
+		}
+		risk, _ := parseRisk(c.Risk)
+		f := Finding{RuleID: c.ID, Service: "whole target", Risk: risk, Title: c.Title, Explain: c.Explain, Advice: c.Advice}
+		if len(ports) > 0 {
+			sort.Ints(ports)
+			f.Evidence = "ports " + joinInts(dedupe(ports))
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func dedupe(xs []int) []int {
+	var out []int
+	for i, x := range xs {
+		if i == 0 || x != xs[i-1] {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func joinInts(xs []int) string {
+	parts := make([]string, len(xs))
+	for i, x := range xs {
+		parts[i] = fmt.Sprint(x)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// SortFindings orders findings worst-first, then per-port before
+// whole-target, then by port.
 func SortFindings(fs []Finding) {
 	sort.SliceStable(fs, func(i, j int) bool {
 		if fs[i].Risk != fs[j].Risk {
 			return fs[i].Risk > fs[j].Risk
+		}
+		if (fs[i].Port == 0) != (fs[j].Port == 0) {
+			return fs[i].Port == 0
 		}
 		return fs[i].Port < fs[j].Port
 	})

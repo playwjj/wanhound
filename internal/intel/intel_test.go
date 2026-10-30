@@ -22,6 +22,10 @@ func TestClassify(t *testing.T) {
 		{"fe80::1", ClassLinkLocal},
 		{"::1", ClassLoopback},
 		{"0.0.0.0", ClassUnspecified},
+		{"198.18.8.84", ClassReserved}, // fake-IP proxy range
+		{"203.0.113.7", ClassReserved},
+		{"2001:db8::7", ClassReserved},
+		{"239.255.255.250", ClassReserved}, // multicast
 	}
 	for _, tc := range cases {
 		_, got, err := Classify(tc.in)
@@ -45,7 +49,7 @@ func TestScannable(t *testing.T) {
 	if ok, _ := Scannable(ClassPublic); !ok {
 		t.Error("public addresses must be scannable")
 	}
-	for _, c := range []Class{ClassPrivate, ClassCGNAT, ClassLoopback, ClassLinkLocal, ClassULA, ClassUnspecified} {
+	for _, c := range []Class{ClassPrivate, ClassCGNAT, ClassLoopback, ClassLinkLocal, ClassULA, ClassUnspecified, ClassReserved} {
 		if ok, why := Scannable(c); ok || why == "" {
 			t.Errorf("Scannable(%v) = %v, want false with explanation", c, ok)
 		}

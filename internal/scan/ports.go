@@ -1,5 +1,11 @@
 package scan
 
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
 // QuickPorts is the curated set used by --quick: services a home
 // network plausibly exposes, weighted toward management interfaces,
 // remote access, file sharing and IoT protocols. The default scan
@@ -98,3 +104,31 @@ type portError string
 
 func (e portError) Error() string  { return "invalid port list: " + string(e) }
 func errBadPort(spec string) error { return portError(spec) }
+
+// FormatPorts renders a port list compactly ("1-1024,8080"), the
+// inverse of ParsePorts. Snapshots store coverage this way so a later
+// diff knows which ports were actually looked at.
+func FormatPorts(ports []int) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	ps := append([]int(nil), ports...)
+	sort.Ints(ps)
+	var b strings.Builder
+	for i := 0; i < len(ps); {
+		j := i
+		for j+1 < len(ps) && ps[j+1] <= ps[j]+1 {
+			j++
+		}
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		if ps[j] > ps[i] {
+			fmt.Fprintf(&b, "%d-%d", ps[i], ps[j])
+		} else {
+			fmt.Fprint(&b, ps[i])
+		}
+		i = j + 1
+	}
+	return b.String()
+}

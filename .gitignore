@@ -1,3 +1,4 @@
 /wanhound
 .wanhound/
 *.snap
+/wanhound-linux-amd64

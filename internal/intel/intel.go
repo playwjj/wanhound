@@ -22,6 +22,10 @@ const (
 	ClassCGNAT // 100.64.0.0/10 — carrier-grade NAT shared address space
 	ClassULA   // fc00::/7 — IPv6 unique local
 	ClassUnspecified
+	// ClassReserved: documentation, benchmarking (198.18.0.0/15 — also
+	// what fake-IP proxies hand out), multicast and other special-purpose
+	// ranges that never identify a home line.
+	ClassReserved
 )
 
 func (c Class) String() string {
@@ -40,15 +44,28 @@ func (c Class) String() string {
 		return "ula"
 	case ClassUnspecified:
 		return "unspecified"
+	case ClassReserved:
+		return "reserved"
 	default:
 		return "invalid"
 	}
 }
 
-var cgnatRange = func() *net.IPNet {
-	_, n, _ := net.ParseCIDR("100.64.0.0/10")
+var cgnatRange = mustCIDR("100.64.0.0/10")
+
+var reservedRanges = []*net.IPNet{
+	mustCIDR("192.0.0.0/24"), mustCIDR("192.0.2.0/24"), mustCIDR("198.18.0.0/15"),
+	mustCIDR("198.51.100.0/24"), mustCIDR("203.0.113.0/24"), mustCIDR("240.0.0.0/4"),
+	mustCIDR("255.255.255.255/32"), mustCIDR("2001:db8::/32"), mustCIDR("100::/64"),
+}
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
 	return n
-}()
+}
 
 // Classify parses and classifies an IP literal. Hostnames are rejected:
 // WanHound audits address literals so a report always names the exact
@@ -67,6 +84,8 @@ func Classify(s string) (net.IP, Class, error) {
 		return ip, ClassLinkLocal, nil
 	case cgnatRange.Contains(ip):
 		return ip, ClassCGNAT, nil
+	case ip.IsMulticast() || isReserved(ip):
+		return ip, ClassReserved, nil
 	case ip.IsPrivate():
 		// net.IP.IsPrivate covers RFC1918 and fc00::/7; split ULA out
 		// for a clearer report.
@@ -77,6 +96,15 @@ func Classify(s string) (net.IP, Class, error) {
 	default:
 		return ip, ClassPublic, nil
 	}
+}
+
+func isReserved(ip net.IP) bool {
+	for _, n := range reservedRanges {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // Scannable reports whether probing this class of address is meaningful,
@@ -93,18 +121,11 @@ func Scannable(c Class) (bool, string) {
 		return false, "this is a loopback address; it exists only on the machine running the tool."
 	case ClassLinkLocal:
 		return false, "this is a link-local address; it is not routed beyond the local segment."
+	case ClassReserved:
+		return false, "this address is in a reserved range (documentation, benchmarking or multicast). 198.18.0.0/15 in particular is what fake-IP proxies (Clash/Surge TUN mode) hand out — it is not your home's address."
 	case ClassUnspecified:
 		return false, "this is the unspecified address (0.0.0.0 / ::); it names no host."
 	default:
 		return false, "unrecognized address class."
 	}
-}
-
-// PTR returns the reverse-DNS names for ip (best effort, may be empty).
-func PTR(ip net.IP) []string {
-	names, err := net.LookupAddr(ip.String())
-	if err != nil {
-		return nil
-	}
-	return names
 }

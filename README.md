@@ -18,13 +18,16 @@ WanHound is the outside companion to [LanHound](https://github.com/playwjj/lanho
 
 ## What it does
 
-- **Full-port TCP audit** of a single IPv4 and/or IPv6 address (all 65,535 ports by default; a curated `--quick` set for fast re-checks). UPnP mappings and device services love random high ports, so the default does not stop at the top 1000.
+- **Full-port TCP audit** of a single IPv4 and/or IPv6 address (all 65,535 ports by default; a curated `--quick` set for fast re-checks; `--ports` for your own list). UPnP mappings and device services love random high ports, so the default does not stop at the top 1000.
+- **Adaptive, conservative pacing** — a short RTT calibration picks the per-connection timeout (a silent gateway does not stretch the audit), a pacer caps the connection rate, and scattered filtered ports get one slower retry pass. A full audit typically takes 1–3 minutes, and the expected worst case is printed before it starts.
 - **Three-state results** — `open` / `closed` / `filtered` are reported separately; silence is never dressed up as "safe".
-- **Service identification** — banner grab, TLS certificate, HTTP title/headers, so a finding says *what* answered, with the evidence attached.
-- **Plain-language risk findings** from a curated, versioned rule base (30+ home-relevant entries): Telnet, exposed databases, router management ports, remote desktop, NAS panels, VPN endpoints… every finding carries a rule ID and one concrete piece of advice.
-- **Snapshot diff** — history is kept per *home label* (not per IP, because home addresses change). The next run calls out **newly opened ports** at the top of the report.
-- **Address sanity checks before scanning** — feed it a private or loopback address and it explains why that cannot be audited from outside; feed it a `100.64.0.0/10` address and it tells you you're behind carrier-grade NAT and there is no public IPv4 exposure to audit.
-- **CLI + Web UI, one binary** — `wanhound scan` for scripts and cron, `wanhound serve` for a password-gated web interface (see the safety section — the gate is not optional).
+- **Service identification** — banner grab, TLS certificate (issuer, expiry, self-signed), HTTP status/server/title over plain HTTP *and* TLS (following one same-origin redirect), so a finding says *what* answered, with the evidence attached and a confidence level.
+- **Plain-language risk findings** from a structured, versioned rule base (60+ entries): every rule is `match (port / banner / title / server / certificate / auth patterns) → risk, explanation, advice, rule ID`. Router and modem admin pages, cameras, NAS panels, hypervisor/container panels, databases, remote desktops, Telnet, TR-069, Winbox, SMB… `wanhound rules` lists them all.
+- **Whole-home combination rules** — router management reachable from the internet, databases/remote desktops published directly, "ten ports open: a DMZ host?", IPv6 hits with no NAT in front, smart-home devices on the street.
+- **Small UDP set** (DNS — including open-resolver detection —, NTP, IKE, OpenVPN, SSDP/UPnP, mDNS, WireGuard), clearly marked advisory.
+- **Snapshot diff** — history is kept per *home label* (not per IP, because home addresses change), address changes are reported as events, and the next run calls out **newly opened ports** at the top. Diffs are coverage-aware: a `--quick` re-check never "closes" the high ports a full audit found.
+- **Vantage-point self-checks before scanning** — private, loopback, CGNAT (`100.64.0.0/10`) and reserved addresses are refused with an explanation; if this machine's public egress *is* the target, or a transparent proxy / TUN-mode VPN is answering for every port, WanHound stops and tells you why instead of producing a distorted report.
+- **CLI + Web UI, one binary** — `wanhound scan` for scripts and cron (exit-code contract, JSON, standalone HTML report, optional Telegram push), `wanhound serve` for a password-gated web interface with live progress, history timeline and side-by-side diff.
 
 ## How it differs
 
@@ -46,7 +49,7 @@ WanHound is a **defensive self-audit tool**, in the same family as nmap or Green
 
 ## Quick start
 
-Build from source (Go 1.23+, no other dependencies — pure standard library, one static binary):
+Build from source (Go 1.25+, no other dependencies — pure standard library, one static binary):
 
 ```bash
 git clone https://github.com/playwjj/wanhound.git
@@ -70,54 +73,94 @@ Run a scan **from outside your home network**:
 # Fast re-check on the curated port set
 ./wanhound scan --ipv4 198.51.100.23 --label home --quick
 
-# Just a few ports
+# Just a few ports (add --udp for the UDP set)
 ./wanhound scan --ipv4 198.51.100.23 --ports 22,80,443,8291
+
+# History and stored reports
+./wanhound history                       # labels
+./wanhound history --label home          # timeline: address changes, new/closed ports
+./wanhound show --label home --html report.html
 ```
 
-Example output:
+Example output (abridged):
 
 ```
-WanHound audit — label "home", target 198.51.100.23
-Scanned 65535 ports in 1m48s: 3 open
+━━ 198.51.100.23 (IPv4) ━━
+AS4134 CHINANET-BACKBONE · CN  (via ipinfo.io — the address was shown to that service)
+Scanned 65535 TCP ports in 1m42s (timeout 412ms, rtt 66ms): 3 open · 0 closed · 65532 filtered
+Compared with 2026-10-23 09:00 (198.51.100.23):
+  NEW open TCP ports: 8291
 
-NEW open ports since last run: 8291
+  PORT       SERVICE                    RISK    FINDING
+  80/tcp     Router / modem admin page  HIGH    A router or modem admin page is reachable from the internet
+  8291/tcp   MikroTik Winbox            HIGH    MikroTik Winbox management is exposed
+  51413/tcp  unknown                    LOW     Port 51413 is open and not in the known-service list
 
-[HIGH  ] 23/tcp  Telnet is exposed
-         evidence: banner=BusyBox shell (login)
-         Telnet sends everything, including passwords, in plaintext. Disable it ... (KH-001)
-[MEDIUM] 8291/tcp  MikroTik Winbox management is exposed
-         Winbox has a history of serious vulnerabilities. Restrict management to LAN/VPN ... (KH-021)
-[LOW   ] 443/tcp  A web service is reachable over HTTPS
-         evidence: tls cert CN="nas.home" SANs=[nas.home]
-         Check the certificate and title in the report to identify it. ... (KH-018)
+Findings (worst first):
+
+[HIGH] whole target  Your router's management is reachable from the internet  (KC-001)
+    evidence  ports 80, 8291
+    what      At least one way of administering the router or modem … answers on the public side.
+    do        In the router: disable remote/WAN management, TR-069 if the router is yours, and UPnP on WAN. …
+
+[HIGH] 80/tcp  A router or modem admin page is reachable from the internet  (KH-040, confidence high — matched identifying evidence)
+    evidence  http 200 title="天翼网关" server="GoAhead-Webs"
+    …
 ```
 
 Notes on the report:
 
 - On an IPv4 target, an open port may be the router's own service **or** a forward/UPnP mapping to an inside device — from outside these cannot always be told apart, and the report says so rather than guessing. On IPv6 there is no NAT: a hit is the device itself.
 - `filtered` means *this vantage point* got silence. Important results deserve a re-check from a second network.
+- Every finding cites its rule ID (`KH-*` per port, `KU-*` UDP, `KC-*` whole target) and its confidence: *high* = identifying evidence matched (banner, title, certificate), *medium* = protocol recognized, *low* = port number only.
+- The report ends with an audit record: time, scanner egress address, target, port set, duration, rule-base version, snapshot ID.
 
 ### Exit codes (for cron / alerting)
 
 | Code | Meaning |
 |---|---|
-| 0 | No high-risk findings |
-| 1 | A high-risk port is open, **or** new ports opened since the last snapshot |
-| 2 | The audit could not run (bad input, unauditable address class) |
+| 0 | No high-risk findings, nothing new |
+| 1 | A high-risk finding, **or** ports newly opened since the last snapshot |
+| 2 | The audit could not run (bad input, unauditable address, distorted vantage point) |
 
 ```bash
-wanhound scan --ipv4 <ip> --label home || \
-  curl -s "https://api.telegram.org/bot<token>/sendMessage" -d "chat_id=<id>&text=WanHound: check the home audit"
+# crontab: daily quick check, Telegram push only when the exit code is 1
+0 7 * * * WANHOUND_TELEGRAM_TOKEN=… WANHOUND_TELEGRAM_CHAT=… wanhound scan --ipv4 198.51.100.23 --label home --quick
 ```
+
+`--json` prints the full machine-readable audit; `--html report.html` writes a standalone one-page report (inline CSS, readable on a phone — good for showing the family).
+
+### Useful flags
+
+| Flag | Default | |
+|---|---|---|
+| `--label` | `home` | History key. Use a name per home ("武汉的家" is fine). |
+| `--quick` / `--ports` | full | Port set. |
+| `--no-udp` / `--udp` | UDP on for full/quick | UDP set. |
+| `--offline` | off | No third-party lookups at all (ASN/PTR profile, egress self-check). |
+| `--timeout` | adaptive | Per-connection timeout in ms. |
+| `--concurrency` / `--rate` | 512 / 2000 per s | Hard-capped at 2048 / 10000. |
+| `--yes` | off | Continue when the vantage-point check objects. |
+| `--data-dir` | `~/.local/share/wanhound` | Or `WANHOUND_DATA`. |
 
 ### Web UI
 
 ```bash
-WANHOUND_PASSWORD='choose-a-strong-one' ./wanhound serve --addr 127.0.0.1:8687
+# Store a hash rather than the plaintext (or set WANHOUND_PASSWORD directly)
+export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-password 2>/dev/null)
+./wanhound serve --addr 127.0.0.1:8687
 # or bind your Tailscale address — avoid public exposure even with a password
 ```
 
-The P0 build serves a gated placeholder; the scan form with live progress, report pages and side-by-side diff land in P1 (see roadmap). The password gate, audit logging and rate limits are already part of the design and are not optional extras.
+New audit form → live progress (cancellable) → report page with risk-colored port table and expandable "what is this / what to do" cards → per-label history timeline (address-change events, new/closed ports) → pick any two snapshots for a side-by-side diff → download any snapshot as a standalone HTML report.
+
+The gate is not optional:
+
+- `serve` will not start without a password (min. 10 characters); it is kept only as a PBKDF2-SHA256 hash. Sessions are HttpOnly, SameSite=Strict cookies; state-changing calls need a custom header (no cross-site forms).
+- Failed logins are slowed and throttled (5 per address and 30 globally per 15 minutes).
+- Each audit must be submitted with an explicit *"I own these addresses or am authorized to test them"* assertion and is written to an append-only `audit.log` (target, client address, user agent, time, outcome), viewable in the UI.
+- One audit at a time, a global cap (`--scans-per-hour`, default 6), and engine limits the browser cannot change.
+- Behind a reverse proxy every client shares the proxy's address for throttling; `X-Forwarded-For` is recorded in the audit log but never trusted.
 
 ## How it works
 
@@ -128,33 +171,38 @@ address ──▶ classify (public? CGNAT? private?) ──▶ connect-scan (3-s
 ```
 
 - Pure Go standard library: no cgo, no embedded nmap, no raw sockets (so no `NET_RAW`, no root).
-- Address intel (ASN/ISP via a public lookup API) is optional and can be fully disabled with `--offline` — note that any online lookup necessarily shows the queried address to that service.
-- Snapshots live in `~/.local/share/wanhound/` as plain JSON.
+- Address intel (ASN/ISP via ipinfo.io, falling back to ip.sb) and the egress self-check (ipify / ifconfig.co / icanhazip) are the only outbound requests besides the probes themselves, and `--offline` disables them all — note that any online lookup necessarily shows the queried address to that service.
+- Snapshots live in `~/.local/share/wanhound/labels/<label>/` as plain JSON, one file per run.
+- Package layout: `cmd/wanhound` (CLI) · `internal/audit` (the pipeline shared by CLI and web) · `internal/intel` (address classes, ASN/PTR profile, egress) · `internal/scan` (TCP engine + UDP set) · `internal/probe` (banner/TLS/HTTP) · `internal/knowledge` (rule base, `rules.json`) · `internal/store` (snapshots/diff) · `internal/report` (terminal, summary, HTML) · `internal/web` (serve mode + embedded UI).
 
 ## Roadmap
 
-- **P0 (this skeleton)** — dual-stack single-target audit, full/quick port sets, three-state engine, banner probing, rule base v1, snapshots + diff, exit-code contract, gated Web UI skeleton.
-- **P1** — adaptive timeouts and filtered-port retry, deeper TLS/HTTP identification, combination rules, UDP probe set, full Web UI (progress, history timeline, side-by-side diff).
-- **P2** — standalone HTML report export, Telegram push of results, optional import of an address list exported from LanHound (audited one by one — still no range scanning).
+- **P0 — done** — dual-stack single-target audit with address classification (CGNAT/private/reserved refusal), full/quick/custom port sets, adaptive timeouts, three-state engine, banner probing, structured rule base, terminal + JSON output, exit-code contract.
+- **P1 — done** — TLS/HTTP deep identification, combination rules, per-label snapshot diff, vantage-point self-checks, UDP probe set, Web UI with progress, report, history timeline and side-by-side diff, plus the full access-control set.
+- **P2 — partly done** — standalone HTML report export ✔, Telegram push ✔. Still open: importing an address list exported from LanHound (audited one by one — still no range scanning).
 
 ## Known limitations
 
 - **The vantage point decides the result.** Different outside networks filter differently; `filtered` is not proof of safety.
+- **Proxies and VPNs on the scanning machine.** A TUN-mode proxy (Clash, Surge…) answers every connection itself; WanHound detects the "everything is open" pattern and refuses, but a split-tunnel setup can still route some probes through a proxy. Run from a clean machine.
 - **Dynamic IPs.** History is keyed by label, but if your address changed, old and new runs may describe different lines — the report flags address changes.
+- **Shared exits.** On carrier-grade NAT, an "what is my IP" site shows an exit shared with other customers. WanHound refuses `100.64.0.0/10` and hints when the ISP profile looks like a mobile/CGNAT operator, but cannot prove which address is yours — use the WAN address shown by your router.
 - **UDP is fuzzy.** No response cannot distinguish open from filtered; UDP findings are advisory.
-- **Identification is fingerprinting.** Banners and titles are evidence, not proof; findings show their evidence and confidence is yours to judge.
+- **Identification is fingerprinting.** Banners and titles are evidence, not proof; findings show their evidence and a confidence level.
 - **IPv6 scope = the addresses you give it.** IPv6 space cannot be enumerated; devices you don't list are not audited.
 
 ## Development
 
 ```bash
-make build   # ./wanhound
-make test    # unit tests (address classification, scanner fixture, port parser)
+make build     # ./wanhound (Go 1.25+, standard library only)
+make test      # unit + integration tests (engine, rules, store/diff, audit pipeline, web access control)
 make vet
-make fmt
+make testbed   # acceptance bench on a Linux Docker host (see below)
 ```
 
-Layout: `cmd/wanhound` (CLI) · `internal/intel` (address classification) · `internal/scan` (engine) · `internal/probe` (service ID) · `internal/knowledge` (rule base, `rules.json`) · `internal/store` (snapshots/diff) · `internal/report` · `internal/web` (serve mode).
+**Test bench.** `scripts/testbed.sh <linux-binary>` starts a container whose ports have known states — listeners (`open`), a TCP-reset reject and an unused port (`closed`), an iptables `DROP` and an ICMP reject (`filtered`), a UDP open resolver, a dropped and a closed UDP port — audits it with `wanhound scan --lab`, asserts every state, rule hit and UDP result, then opens one more port and asserts the diff and exit code 1. The firewall rules live inside the container's network namespace; the host firewall is untouched. `--lab` (CLI and `serve`) permits private/loopback targets for exactly this purpose; CGNAT and reserved ranges stay refused.
+
+The rule base is `internal/knowledge/rules.json`: bump `version` when editing, keep specific evidence rules before port-number fallbacks within a `group`, and run `make test` — the loader rejects duplicate IDs, bad regexes and rules without conditions.
 
 ## License
 

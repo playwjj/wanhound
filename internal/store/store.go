@@ -244,6 +244,49 @@ func (s *Store) Latest(label, family string) (*Snapshot, error) {
 	return nil, nil
 }
 
+// Delete removes one snapshot. The next audit diffs against whatever
+// snapshot is then the latest.
+func (s *Store) Delete(label, id string) error {
+	if _, err := s.Get(label, id); err != nil {
+		return err
+	}
+	return os.Remove(filepath.Join(s.labelDir(label), id+".json"))
+}
+
+// DeleteLabel removes a label and its whole history.
+func (s *Store) DeleteLabel(label string) error {
+	if err := ValidLabel(label); err != nil {
+		return err
+	}
+	dir := s.labelDir(label)
+	if _, err := os.Stat(dir); err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
+// Prune keeps the newest keep snapshots per address family under label
+// and deletes the rest, returning how many were removed.
+func (s *Store) Prune(label string, keep int) (int, error) {
+	all, err := s.List(label)
+	if err != nil {
+		return 0, err
+	}
+	seen := map[string]int{}
+	removed := 0
+	for i := len(all) - 1; i >= 0; i-- {
+		snap := all[i]
+		seen[snap.Family]++
+		if seen[snap.Family] > keep {
+			if err := s.Delete(label, snap.ID); err != nil {
+				return removed, err
+			}
+			removed++
+		}
+	}
+	return removed, nil
+}
+
 // Labels returns every label that has history, sorted.
 func (s *Store) Labels() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(s.dir, "labels"))

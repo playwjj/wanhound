@@ -123,3 +123,32 @@ func TestCoverageLocalized(t *testing.T) {
 		t.Errorf("coverage zh = %q", zh)
 	}
 }
+
+func TestDeleteAndPrune(t *testing.T) {
+	st, _ := Open(t.TempDir())
+	t0 := time.Now()
+	for i := 0; i < 5; i++ {
+		if err := st.Save(snap("home", "198.51.100.1", "full", "1-65535", t0.Add(time.Duration(i)*time.Hour), 22)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, _ := st.List("home")
+	if err := st.Delete("home", all[4].ID); err != nil {
+		t.Fatal(err)
+	}
+	if latest, _ := st.Latest("home", "v4"); latest.ID != all[3].ID {
+		t.Error("after deleting the newest, Latest must fall back to the previous one")
+	}
+	if n, err := st.Prune("home", 2); err != nil || n != 2 {
+		t.Errorf("Prune = %d, %v; want 2 removed", n, err)
+	}
+	if err := st.Delete("home", "../x"); err == nil {
+		t.Error("traversal id must be rejected")
+	}
+	if err := st.DeleteLabel("home"); err != nil {
+		t.Fatal(err)
+	}
+	if labels, _ := st.Labels(); len(labels) != 0 {
+		t.Errorf("labels after DeleteLabel = %v", labels)
+	}
+}

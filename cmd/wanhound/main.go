@@ -55,6 +55,8 @@ func main() {
 		err = runScanLanHound(os.Args[2:])
 	case "history":
 		err = runHistory(os.Args[2:])
+	case "delete":
+		err = runDelete(os.Args[2:])
 	case "show":
 		err = runShow(os.Args[2:])
 	case "rules":
@@ -92,6 +94,7 @@ Usage:
   wanhound serve   [--addr 127.0.0.1:8687]   (WANHOUND_PASSWORD or WANHOUND_PASSWORD_HASH required)
   wanhound history [--label <name>]
   wanhound show    --label <name> [--id <snapshot-id>] [--json | --html <file>]
+  wanhound delete  --label <name> (--id <snapshot-id> | --keep <n> | --all)
   wanhound rules   list the built-in rule base
   wanhound hash-password   read a password on stdin, print a hash for WANHOUND_PASSWORD_HASH
 
@@ -257,11 +260,6 @@ func confirmInside(target, why string) bool {
 	return strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
 }
 
-func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
-
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -313,6 +311,74 @@ func runHistory(args []string) error {
 		fmt.Println(line)
 	}
 	return nil
+}
+
+func runDelete(args []string) error {
+	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
+	label := fs.String("label", "", "label to delete from")
+	id := fs.String("id", "", "delete one snapshot")
+	keep := fs.Int("keep", 0, "keep only the newest N snapshots per address family")
+	all := fs.Bool("all", false, "delete the label and its whole history")
+	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	dataDir := fs.String("data-dir", envOr("WANHOUND_DATA", ""), "snapshot directory")
+	if err := fs.Parse(args); err != nil {
+		return exitError(2)
+	}
+	modes := 0
+	for _, on := range []bool{*id != "", *keep > 0, *all} {
+		if on {
+			modes++
+		}
+	}
+	if *label == "" || modes != 1 {
+		fmt.Fprintln(os.Stderr, "delete: give --label and exactly one of --id, --keep or --all")
+		return exitError(2)
+	}
+	st, err := store.Open(*dataDir)
+	if err != nil {
+		return err
+	}
+	snaps, err := st.List(*label)
+	if err != nil {
+		return err
+	}
+	if len(snaps) == 0 {
+		return fmt.Errorf("no snapshots under label %q", *label)
+	}
+	if !*yes {
+		what := fmt.Sprintf("all %d snapshot(s) of label %q", len(snaps), *label)
+		if *id != "" {
+			what = fmt.Sprintf("snapshot %s of label %q", *id, *label)
+		} else if *keep > 0 {
+			what = fmt.Sprintf("all but the newest %d snapshot(s) per family of label %q", *keep, *label)
+		}
+		if !isTerminal(os.Stdin) {
+			fmt.Fprintf(os.Stderr, "delete: would delete %s; pass --yes to confirm\n", what)
+			return exitError(2)
+		}
+		fmt.Fprintf(os.Stderr, "Delete %s? This cannot be undone. [y/N] ", what)
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			return exitError(2)
+		}
+	}
+	switch {
+	case *id != "":
+		err = st.Delete(*label, *id)
+		if err == nil {
+			fmt.Println("deleted", *id)
+		}
+	case *keep > 0:
+		var n int
+		n, err = st.Prune(*label, *keep)
+		fmt.Printf("deleted %d snapshot(s)\n", n)
+	default:
+		err = st.DeleteLabel(*label)
+		if err == nil {
+			fmt.Printf("deleted label %q\n", *label)
+		}
+	}
+	return err
 }
 
 func runShow(args []string) error {

@@ -3,13 +3,11 @@ package scan
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -133,7 +131,7 @@ func probeUDP(ctx context.Context, ip string, p udpProbe, timeout time.Duration)
 	buf := make([]byte, 2048)
 	for attempt := 0; attempt < 2 && ctx.Err() == nil; attempt++ {
 		if _, err := conn.Write(p.payload()); err != nil {
-			if errors.Is(err, syscall.ECONNREFUSED) {
+			if isRefused(err) {
 				r.State = UDPClosed
 				return r
 			}
@@ -150,7 +148,7 @@ func probeUDP(ctx context.Context, ip string, p udpProbe, timeout time.Duration)
 		}
 		// A connected UDP socket surfaces ICMP port-unreachable as
 		// ECONNREFUSED on the next read.
-		if errors.Is(err, syscall.ECONNREFUSED) {
+		if isRefused(err) {
 			r.State = UDPClosed
 			return r
 		}

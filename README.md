@@ -57,7 +57,7 @@ WanHound is a **defensive self-audit tool**, in the same family as nmap or Green
 
 ## Quick start
 
-Build from source (Go 1.25+, no other dependencies — pure standard library, one static binary):
+Download a binary from [Releases](https://github.com/playwjj/wanhound/releases) (Linux, macOS, Windows), or build from source (Go 1.25+, no other dependencies — pure standard library, one static binary):
 
 ```bash
 git clone https://github.com/playwjj/wanhound.git
@@ -88,6 +88,10 @@ Run a scan **from outside your home network**, using the WAN address your router
 ./wanhound history                       # labels
 ./wanhound history --label home          # timeline: address changes, new/closed ports
 ./wanhound show --label home --html report.html
+
+# Housekeeping
+./wanhound delete --label home --keep 10     # keep the newest 10 per address family
+./wanhound delete --label home --id <snapshot-id>
 ```
 
 Example output (abridged):
@@ -165,6 +169,7 @@ IPv6 has no NAT: each device at home has its own public address, and those addre
 - Each device gets its own history label (`home · <device>`), so every device has its own diff.
 - The target list is shown and must be confirmed (`--yes` for non-interactive runs); more targets than `--max` (default 32) are refused.
 - IPv6 privacy (temporary) addresses rotate; an address seen a while ago may be gone.
+- The Web UI does the same: load `devices.csv` at the bottom of the New audit page, tick devices, and they are audited one after another with a per-device summary at the end.
 
 ### Web UI
 
@@ -196,6 +201,7 @@ The gate is not optional:
 - Failed logins are slowed and throttled (5 per address and 30 globally per 15 minutes).
 - Each audit must be submitted with an explicit *"I own these addresses or am authorized to test them"* assertion and is written to an append-only `audit.log` (target, client address, user agent, time, outcome), viewable in the UI.
 - One audit at a time, a global cap (`--scans-per-hour`, default 6), and engine limits the browser cannot change.
+- Snapshots and whole labels can be deleted from the history page (two-step confirmation, audit-logged); `audit.log` rotates to `audit.log.1` past 5 MB.
 - Behind a reverse proxy every client shares the proxy's address for throttling; `X-Forwarded-For` is recorded in the audit log but never trusted.
 
 ## How it works
@@ -207,7 +213,7 @@ address ──▶ classify (public? CGNAT? private?) ──▶ connect-scan (3-s
 ```
 
 - Pure Go standard library: no cgo, no embedded nmap, no raw sockets (so no `NET_RAW`, no root).
-- Address intel (ASN/ISP via ipinfo.io, falling back to ip.sb) and the egress self-check (ipify / ifconfig.co / icanhazip) are the only outbound requests besides the probes themselves, and `--offline` disables them all — note that any online lookup necessarily shows the queried address to that service.
+- Address intel (ASN/ISP via ipinfo.io — set `WANHOUND_IPINFO_TOKEN` to use a token — falling back to ip.sb) and the egress self-check (ipify / ifconfig.co / icanhazip) are the only outbound requests besides the probes themselves, and `--offline` disables them all — note that any online lookup necessarily shows the queried address to that service.
 - Snapshots live in `~/.local/share/wanhound/labels/<label>/` as plain JSON, one file per run.
 - Package layout: `cmd/wanhound` (CLI) · `internal/audit` (the pipeline shared by CLI and web) · `internal/intel` (address classes, ASN/PTR profile, egress) · `internal/scan` (TCP engine + UDP set) · `internal/probe` (banner/TLS/HTTP) · `internal/knowledge` (rule base, `rules.json`) · `internal/store` (snapshots/diff) · `internal/report` (terminal, summary, HTML) · `internal/web` (serve mode + embedded UI).
 
@@ -217,6 +223,7 @@ address ──▶ classify (public? CGNAT? private?) ──▶ connect-scan (3-s
 - **P1 — done** — TLS/HTTP deep identification, combination rules, per-label snapshot diff, vantage-point self-checks, UDP probe set, Web UI with progress, report, history timeline and side-by-side diff, plus the full access-control set.
 - **P2 — done** — standalone HTML report export ✔, Telegram push ✔, auditing each device's IPv6 from a LanHound export ✔ (one by one — still no range scanning).
 - **v0.3** — Simplified Chinese reports (terminal, HTML, Web UI, Telegram digest).
+- **v0.4** — LanHound batch import in the Web UI; snapshot/label deletion and `audit.log` rotation; macOS and Windows binaries; ipinfo token.
 
 ## Known limitations
 
@@ -224,6 +231,7 @@ address ──▶ classify (public? CGNAT? private?) ──▶ connect-scan (3-s
 - **Proxies and VPNs on the scanning machine.** A TUN-mode proxy (Clash, Surge…) answers every connection itself; WanHound detects the "everything is open" pattern and refuses, but a split-tunnel setup can still route some probes through a proxy. Run from a clean machine.
 - **Dynamic IPs.** History is keyed by label, but if your address changed, old and new runs may describe different lines — the report flags address changes.
 - **Shared exits.** On carrier-grade NAT, an "what is my IP" site shows an exit shared with other customers. WanHound refuses `100.64.0.0/10` and hints when the ISP profile looks like a mobile/CGNAT operator, but cannot prove which address is yours — use the WAN address shown by your router.
+- **ICMP rejects read as closed on Linux.** When a firewall rejects with ICMP *port unreachable*, Linux reports it to `connect()` exactly like a TCP reset, so the port shows as `closed` (which, for exposure, it is). Other ICMP rejects such as admin-prohibited show as `filtered`.
 - **UDP is fuzzy.** No response cannot distinguish open from filtered; UDP findings are advisory.
 - **Identification is fingerprinting.** Banners and titles are evidence, not proof; findings show their evidence and a confidence level.
 - **IPv6 scope = the addresses you give it.** IPv6 space cannot be enumerated; devices you don't list are not audited.

@@ -22,7 +22,6 @@ import (
 	"net"
 	"sort"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -392,14 +391,14 @@ func probe(ctx context.Context, opts Options, ip string, port int) (PortResult, 
 // TCP reset (ECONNREFUSED), so a firewall rejecting that way reads as
 // closed — which, for exposure, is what it is.
 func classify(err error) State {
-	if errors.Is(err, syscall.ECONNREFUSED) {
+	if isRefused(err) {
 		return StateClosed
 	}
 	return StateFiltered
 }
 
 func isLocalTransient(err error) bool {
-	for _, e := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOBUFS, syscall.EADDRNOTAVAIL, syscall.EAGAIN} {
+	for _, e := range localTransient {
 		if errors.Is(err, e) {
 			return true
 		}

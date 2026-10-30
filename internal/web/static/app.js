@@ -49,6 +49,13 @@ const L = {
     ps_name_full: "full", ps_name_quick: "quick", ps_name_custom: "custom", whole: "whole target",
     "udp_open": "open", "udp_closed": "closed", "udp_open|filtered": "open|filtered",
     https_only: " (HTTPS-only port: plaintext request rejected)", self_signed: " self-signed", expired: " EXPIRED", lang_switch: "中文",
+    lh_title: "From LanHound: each device's IPv6", lh_intro: "IPv6 has no NAT, so every device is its own exposure. Load the device table exported by LanHound (devices.csv); WanHound audits each device's public IPv6 address one at a time.",
+    lh_file: "LanHound export (devices.csv)", lh_all: "Use every public IPv6 of each device (default: the most recent one)", lh_preview: "Read devices",
+    lh_none: "No device in this export has a public IPv6 address.", lh_found: "{0} device address(es) found — select up to {1}:", lh_device: "Device",
+    lh_rotate: "IPv6 privacy addresses rotate; addresses LanHound saw a while ago may be gone.", lh_start: "Audit selected devices", lh_need: "Select at least one device.",
+    lh_too_many: "Select at most {0} devices.", ps_quick_short: "Quick set (recommended for many devices)", ps_full_short: "All ports",
+    batch: "Device {0} of {1}: {2}", batch_summary: "Devices", col_ipv6: "IPv6", col_new: "New", col_worst: "Worst",
+    del: "Delete", del_confirm: "Confirm delete", del_label: "Delete this label and its history", deleted: "Deleted.",
   },
   zh: {
     signin: "登录", signin_note: "这台 WanHound 服务器受口令保护，每次审计都会被记录。", password: "口令",
@@ -88,6 +95,13 @@ const L = {
     ps_name_full: "全端口", ps_name_quick: "快速", ps_name_custom: "自定义", whole: "整体",
     "udp_open": "开放", "udp_closed": "关闭", "udp_open|filtered": "开放或被过滤",
     https_only: "（仅 HTTPS：明文请求被拒绝）", self_signed: " 自签名", expired: " 已过期", lang_switch: "EN",
+    lh_title: "从 LanHound 导入：逐台审计设备 IPv6", lh_intro: "IPv6 没有 NAT，每台设备都是独立的暴露面。载入 LanHound 导出的设备表（devices.csv），WanHound 会逐台审计每台设备的公网 IPv6 地址。",
+    lh_file: "LanHound 导出文件（devices.csv）", lh_all: "使用每台设备的全部公网 IPv6（默认只用最近的一个）", lh_preview: "读取设备",
+    lh_none: "这个导出文件中没有任何设备拥有公网 IPv6 地址。", lh_found: "找到 {0} 个设备地址——最多选择 {1} 个：", lh_device: "设备",
+    lh_rotate: "IPv6 隐私地址会轮换，LanHound 较早看到的地址可能已失效。", lh_start: "审计所选设备", lh_need: "请至少选择一台设备。",
+    lh_too_many: "最多选择 {0} 台设备。", ps_quick_short: "快速集（设备多时推荐）", ps_full_short: "全部端口",
+    batch: "第 {0}/{1} 台设备：{2}", batch_summary: "设备", col_ipv6: "IPv6", col_new: "新开放", col_worst: "最高风险",
+    del: "删除", del_confirm: "确认删除", del_label: "删除此标签及全部历史", deleted: "已删除。",
   },
 };
 
@@ -302,7 +316,65 @@ async function viewNew() {
     submit.disabled = true;
   }
   if (session.lab) nodes.push(el("div", { class: "warn" }, tr("lab")));
-  setView(...nodes, form);
+  setView(...nodes, form, lanhoundCard(f.label, task && task.state === "running"));
+}
+
+// lanhoundCard: upload a LanHound devices.csv, pick devices, audit each
+// device's public IPv6 one after another.
+function lanhoundCard(labelInput, busy) {
+  const file = el("input", { type: "file", id: "lhfile", accept: ".csv,text/csv" });
+  const all = el("input", { type: "checkbox", id: "lhall" });
+  const msg = el("div");
+  const list = el("div");
+  const read = el("button", { type: "button", onclick: async () => {
+    msg.replaceChildren(); list.replaceChildren();
+    if (!file.files.length) return;
+    try {
+      const text = await file.files[0].text();
+      const res = await api("POST", "/api/lanhound/preview", { csv: text, all: all.checked });
+      renderPicker(res.targets, res.max);
+    } catch (err) { msg.append(errorBox(err.message)); }
+  } }, tr("lh_preview"));
+
+  function renderPicker(targets, max) {
+    if (!targets.length) { list.append(el("div", { class: "warn" }, tr("lh_none"))); return; }
+    const boxes = targets.map((t, i) => el("input", { type: "checkbox", checked: i < max, "aria-label": t.device }));
+    const quick = el("input", { type: "radio", name: "lhset", value: "quick", checked: true });
+    const full = el("input", { type: "radio", name: "lhset", value: "full" });
+    const udp = el("input", { type: "checkbox", checked: true });
+    const auth = el("input", { type: "checkbox" });
+    const go = el("button", { class: "primary", type: "button", disabled: busy, onclick: async () => {
+      msg.replaceChildren();
+      const picked = targets.filter((_, i) => boxes[i].checked);
+      if (!picked.length) { msg.append(errorBox(tr("lh_need"))); return; }
+      if (picked.length > max) { msg.append(errorBox(tr("lh_too_many", max))); return; }
+      if (!auth.checked) { msg.append(errorBox(tr("need_auth"))); return; }
+      go.disabled = true;
+      try {
+        await api("POST", "/api/lanhound/scan", { label: labelInput.value.trim(), port_set: full.checked ? "full" : "quick",
+          udp: udp.checked, offline: false, authorized: true, lang, targets: picked });
+        location.hash = "#/task";
+      } catch (err) { msg.append(errorBox(err.message)); go.disabled = false; }
+    } }, tr("lh_start"));
+    list.append(
+      el("p", { class: "small" }, tr("lh_found", targets.length, max)),
+      el("div", { class: "scroll" }, el("table", { class: "tbl" },
+        el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, tr("lh_device")), el("th", {}, tr("col_ipv6")))),
+        el("tbody", {}, targets.map((t, i) => el("tr", {}, el("td", {}, boxes[i]), el("td", {}, t.device), el("td", { class: "mono" }, t.ipv6)))))),
+      el("p", { class: "muted small" }, tr("lh_rotate")),
+      el("div", { class: "opts" }, el("label", { class: "check" }, quick, tr("ps_quick_short")), el("label", { class: "check" }, full, tr("ps_full_short"))),
+      el("label", { class: "check" }, udp, el("span", {}, tr("udp_opt", (session.udp_ports || []).join(", ")))),
+      el("label", { class: "check" }, auth, el("span", {}, el("b", {}, tr("auth_b")), tr("auth_rest"))),
+      go);
+  }
+
+  return el("div", { class: "card" },
+    el("h2", {}, tr("lh_title")),
+    el("p", { class: "muted small" }, tr("lh_intro")),
+    el("label", { class: "f", for: "lhfile" }, tr("lh_file")),
+    el("div", { class: "row" }, file, read),
+    el("label", { class: "check" }, all, el("span", {}, tr("lh_all"))),
+    msg, list);
 }
 
 // ---- running task ------------------------------------------------------
@@ -329,6 +401,7 @@ async function viewTask() {
     const pct = c.stage === "tcp" && c.total ? Math.floor((c.done || 0) * 100 / c.total) : null;
     const bar = el("div", { class: "bar", role: "progressbar", "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": pct ?? 0 }, el("div"));
     bar.firstChild.style.width = (pct ?? 3) + "%";
+    if (task.devices && task.devices.length > 1) head.append(el("p", { class: "small" }, tr("batch", task.index + 1, task.devices.length, task.devices[task.index])));
     head.append(bar, el("p", { class: "small" }, c.target ? c.target + " — " : "", stageText(c), pct !== null ? ` ${pct}% (${c.done}/${c.total})` : ""));
     head.append(el("button", { class: "danger", type: "button", onclick: async (e) => {
       e.target.disabled = true;
@@ -338,9 +411,40 @@ async function viewTask() {
   if (task.log && task.log.length) head.append(el("ul", { class: "log" }, task.log.map((l) => el("li", {}, l))));
   if (task.error) head.append(errorBox(task.error));
   const nodes = [head];
-  if (task.report) nodes.push(...renderReport(task.report));
+  const reports = task.reports || [];
+  if (reports.length > 1 || (task.devices && task.devices.length > 1)) nodes.push(batchSummary(task, reports));
+  else if (reports.length === 1) nodes.push(...renderReport(reports[0]));
   setView(...nodes);
   if (task.state === "running") pollTimer = setTimeout(viewTask, 1000);
+}
+
+// batchSummary: one row per audited device, linking to its snapshot.
+function batchSummary(task, reports) {
+  const rows = reports.map((rep, i) => {
+    const s = (rep.targets || [])[0];
+    const device = (task.devices || [])[i] || "";
+    if (!s) return el("tr", {}, el("td", {}, device), el("td", { colspan: 4 }, (rep.errors || []).map((e) => txt(e.reason)).join(" ")));
+    const worst = maxRisk(s.findings);
+    return el("tr", { class: "r-" + worst },
+      el("td", {}, el("a", { href: `#/snap/${encodeURIComponent(s.label)}/${s.id}` }, device)),
+      el("td", { class: "mono" }, s.ip), el("td", {}, String(s.counts.open)), el("td", {}, badge(worst)),
+      el("td", { class: "new" }, s.changes && s.changes.opened ? s.changes.opened.join(", ") : ""));
+  });
+  return el("div", { class: "card scroll" }, el("h2", {}, tr("batch_summary")), el("table", { class: "tbl" },
+    el("thead", {}, el("tr", {}, el("th", {}, tr("lh_device")), el("th", {}, tr("col_ipv6")), el("th", {}, tr("open")), el("th", {}, tr("col_worst")), el("th", {}, tr("col_new")))),
+    el("tbody", {}, rows)));
+}
+
+// confirmButton: a two-step inline confirmation (no browser dialogs).
+function confirmButton(label, onConfirm) {
+  const b = el("button", { type: "button", class: "danger small-btn" }, label);
+  let armed = false;
+  b.addEventListener("click", async () => {
+    if (!armed) { armed = true; b.textContent = tr("del_confirm"); setTimeout(() => { armed = false; b.textContent = label; }, 4000); return; }
+    b.disabled = true;
+    try { await onConfirm(); } catch (err) { b.after(errorBox(err.message)); b.disabled = false; }
+  });
+  return b;
 }
 
 function stageText(c) {
@@ -479,9 +583,18 @@ async function viewHistory(label) {
         el("span", { class: "mono" }, m.ip), el("span", { class: "muted small" }, `IP${m.family} · ${tr("ps_name_" + m.port_set)} · ${tr("n_open", m.counts.open)}`)),
       m.ip_change ? el("div", { class: "event" }, tr("addr_event", m.ip_change)) : null,
       m.opened ? el("div", { class: "new small" }, tr("new_short", m.opened.join(", "))) : null,
-      m.closed ? el("div", { class: "gone small" }, tr("closed_short", m.closed.join(", "))) : null));
+      m.closed ? el("div", { class: "gone small" }, tr("closed_short", m.closed.join(", "))) : null,
+      el("div", {}, confirmButton(tr("del"), async () => {
+        await api("POST", "/api/snapshot/delete", { label, id: m.id });
+        viewHistory(label);
+      }))));
   }));
-  setView(el("h1", {}, tr("hist_title", label)), el("div", { class: "card" }, el("div", { class: "row" }, cmp, hint), list));
+  const delLabel = confirmButton(tr("del_label"), async () => {
+    await api("POST", "/api/label/delete", { label });
+    location.hash = "#/history";
+  });
+  setView(el("h1", {}, tr("hist_title", label)), el("div", { class: "card" }, el("div", { class: "row" }, cmp, hint), list),
+    el("div", { class: "row" }, delLabel));
 }
 
 async function viewSnapshot(label, id) {

@@ -42,6 +42,9 @@ import (
 //go:embed static
 var staticFS embed.FS
 
+// maxLogSize is when audit.log rotates to audit.log.1.
+const maxLogSize = 5 << 20
+
 // Options controls the server.
 type Options struct {
 	Addr         string // listen address, e.g. "127.0.0.1:8687"
@@ -141,6 +144,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/snapshot/html", s.auth(http.HandlerFunc(s.handleSnapshotHTML)))
 	mux.Handle("GET /api/diff", s.auth(http.HandlerFunc(s.handleDiff)))
 	mux.Handle("GET /api/audit-log", s.auth(http.HandlerFunc(s.handleAuditLog)))
+	mux.Handle("POST /api/lanhound/preview", s.auth(http.HandlerFunc(s.handleLanHoundPreview)))
+	mux.Handle("POST /api/lanhound/scan", s.auth(http.HandlerFunc(s.handleLanHoundScan)))
+	mux.Handle("POST /api/snapshot/delete", s.auth(http.HandlerFunc(s.handleDeleteSnapshot)))
+	mux.Handle("POST /api/label/delete", s.auth(http.HandlerFunc(s.handleDeleteLabel)))
 	return securityHeaders(mux)
 }
 
@@ -193,11 +200,13 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-func readJSON(r *http.Request, v any) error {
+func readJSON(r *http.Request, v any) error { return readJSONLimit(r, v, 64*1024) }
+
+func readJSONLimit(r *http.Request, v any, limit int64) error {
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		return errors.New("expected application/json")
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, 64*1024))
+	dec := json.NewDecoder(io.LimitReader(r.Body, limit))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
 }
@@ -300,10 +309,22 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 	entry := map[string]any{"action": "scan_start", "label": req.Label, "ipv4": req.IPv4, "ipv6": req.IPv6,
 		"port_set": req.PortSet, "udp": req.UDP, "offline": req.Offline, "accept_inside": req.AcceptInside, "authorized": true}
-	task, err := s.tasks.start(s.st, req, s.opts.ScansPerHour, func(t *Task) {
+	s.launch(w, r, req.Label, []audit.Request{req}, nil, entry)
+}
+
+// launch starts a task and writes the response; entry is the audit-log
+// record of the request.
+func (s *Server) launch(w http.ResponseWriter, r *http.Request, label string, reqs []audit.Request, devices []string, entry map[string]any) {
+	task, err := s.tasks.start(s.st, label, reqs, devices, s.opts.ScansPerHour, func(t *Task) {
 		e := map[string]any{"action": "scan_" + t.State, "task": t.ID, "label": t.Label, "targets": t.Targets}
-		if t.Report != nil {
-			e["exit_code"] = t.Report.ExitCode
+		code := 0
+		for _, rep := range t.Reports {
+			if rep.ExitCode > code {
+				code = rep.ExitCode
+			}
+		}
+		if len(t.Reports) > 0 {
+			e["exit_code"] = code
 		}
 		if t.Error != "" {
 			e["error"] = t.Error
@@ -329,19 +350,21 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	t := s.tasks.snapshot()
-	if t != nil && t.Report != nil {
+	if t != nil {
 		lang := langOf(r)
-		rep := *t.Report
-		rep.Targets = nil
-		for _, snap := range t.Report.Targets {
-			rep.Targets = append(rep.Targets, snap.Localized(lang))
+		for i, orig := range t.Reports {
+			rep := *orig
+			rep.Targets = nil
+			for _, snap := range orig.Targets {
+				rep.Targets = append(rep.Targets, snap.Localized(lang))
+			}
+			rep.Errors = nil
+			for _, e := range orig.Errors {
+				e.Reason = e.Reason.Localized(lang)
+				rep.Errors = append(rep.Errors, e)
+			}
+			t.Reports[i] = &rep
 		}
-		rep.Errors = nil
-		for _, e := range t.Report.Errors {
-			e.Reason = e.Reason.Localized(lang)
-			rep.Errors = append(rep.Errors, e)
-		}
-		t.Report = &rep
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"task": t})
 }
@@ -492,6 +515,10 @@ func (s *Server) auditEntry(e map[string]any) {
 	}
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
+	// Rotate at maxLogSize: keep one previous generation (audit.log.1).
+	if fi, err := os.Stat(s.logPath); err == nil && fi.Size() > maxLogSize {
+		os.Rename(s.logPath, s.logPath+".1")
+	}
 	f, err := os.OpenFile(s.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "audit log:", err)

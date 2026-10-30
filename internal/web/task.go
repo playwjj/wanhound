@@ -13,19 +13,23 @@ import (
 
 // Task is the single audit the server may run at a time.
 type Task struct {
-	ID       string        `json:"id"`
-	State    string        `json:"state"` // running | done | failed | cancelled
-	Label    string        `json:"label"`
-	Targets  []string      `json:"targets"`
-	PortSet  string        `json:"port_set"`
-	Started  time.Time     `json:"started"`
-	Finished time.Time     `json:"finished,omitzero"`
-	Current  audit.Event   `json:"current"` // latest progress
-	Log      []string      `json:"log"`     // stage messages
-	Report   *audit.Report `json:"report,omitempty"`
-	Error    string        `json:"error,omitempty"`
+	ID       string          `json:"id"`
+	State    string          `json:"state"` // running | done | failed | cancelled
+	Label    string          `json:"label"`
+	Targets  []string        `json:"targets"`
+	PortSet  string          `json:"port_set"`
+	Started  time.Time       `json:"started"`
+	Finished time.Time       `json:"finished,omitzero"`
+	Current  audit.Event     `json:"current"` // latest progress
+	Log      []string        `json:"log"`     // stage messages
+	Reports  []*audit.Report `json:"reports,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	// Batch tasks (LanHound import) audit several devices in turn.
+	Devices []string `json:"devices,omitempty"`
+	Index   int      `json:"index"` // 0-based device being audited`
 
 	cancel context.CancelFunc
+	labels map[string]bool // every label this task writes to
 }
 
 // tasks enforces "one audit at a time" and keeps the last one for the UI.
@@ -42,8 +46,9 @@ type startError struct {
 
 func (e *startError) Error() string { return e.msg }
 
-// start launches req unless a task is running or the hourly cap is hit.
-func (t *tasks) start(st *store.Store, req audit.Request, perHour int, onDone func(*Task)) (*Task, error) {
+// start launches reqs (one audit each, in order) unless a task is
+// running or the hourly cap is hit. devices names batch entries.
+func (t *tasks) start(st *store.Store, label string, reqs []audit.Request, devices []string, perHour int, onDone func(*Task)) (*Task, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.cur != nil && t.cur.State == "running" {
@@ -65,23 +70,42 @@ func (t *tasks) start(st *store.Store, req audit.Request, perHour int, onDone fu
 	b := make([]byte, 8)
 	rand.Read(b)
 	ctx, cancel := context.WithCancel(context.Background())
-	task := &Task{ID: hex.EncodeToString(b), State: "running", Label: req.Label, PortSet: req.PortSet, Started: now, cancel: cancel}
-	for _, a := range []string{req.IPv4, req.IPv6} {
-		if a != "" {
-			task.Targets = append(task.Targets, a)
+	task := &Task{ID: hex.EncodeToString(b), State: "running", Label: label, PortSet: reqs[0].PortSet, Started: now, Devices: devices, cancel: cancel}
+	for _, req := range reqs {
+		for _, a := range []string{req.IPv4, req.IPv6} {
+			if a != "" {
+				task.Targets = append(task.Targets, a)
+			}
 		}
+	}
+	task.labels = map[string]bool{}
+	for _, req := range reqs {
+		task.labels[req.Label] = true
 	}
 	t.cur = task
 
 	go func() {
-		rep, err := audit.Run(ctx, st, req, audit.Hooks{Progress: func(e audit.Event) {
+		var err error
+		for i, req := range reqs {
 			t.mu.Lock()
-			defer t.mu.Unlock()
-			task.Current = e
-			if e.Message != "" && len(task.Log) < 100 {
-				task.Log = append(task.Log, e.Target+": "+e.Message)
+			task.Index = i
+			t.mu.Unlock()
+			var rep *audit.Report
+			rep, err = audit.Run(ctx, st, req, audit.Hooks{Progress: func(e audit.Event) {
+				t.mu.Lock()
+				defer t.mu.Unlock()
+				task.Current = e
+				if e.Message != "" && len(task.Log) < 200 {
+					task.Log = append(task.Log, e.Target+": "+e.Message)
+				}
+			}})
+			if err != nil {
+				break
 			}
-		}})
+			t.mu.Lock()
+			task.Reports = append(task.Reports, rep)
+			t.mu.Unlock()
+		}
 		t.mu.Lock()
 		task.Finished = time.Now()
 		switch {
@@ -90,7 +114,7 @@ func (t *tasks) start(st *store.Store, req audit.Request, perHour int, onDone fu
 		case err != nil:
 			task.State, task.Error = "failed", err.Error()
 		default:
-			task.State, task.Report = "done", rep
+			task.State = "done"
 		}
 		cancel()
 		t.mu.Unlock()
@@ -120,5 +144,16 @@ func (t *tasks) snapshot() *Task {
 	}
 	c := *t.cur
 	c.Log = append([]string(nil), t.cur.Log...)
+	c.Reports = append([]*audit.Report(nil), t.cur.Reports...)
 	return &c
+}
+
+// busyWith reports whether the running task writes under label.
+func (t *tasks) busyWith(label string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cur == nil || t.cur.State != "running" {
+		return false
+	}
+	return t.cur.labels[label]
 }

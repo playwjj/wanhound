@@ -105,6 +105,7 @@ WanHound is a **defensive self-audit tool**, in the same family as nmap or Green
 - **P1 — done** — TLS/HTTP deep identification, combination rules, per-label snapshot diff, vantage-point self-checks, UDP probe set, Web UI with progress, report, history timeline and side-by-side diff, plus the full access-control set.
 - **P2 — done** — standalone HTML report export ✔, Telegram push ✔, auditing each device's IPv6 from a LanHound export ✔ (one by one — still no range scanning).
 - **v0.3** — Simplified Chinese reports (terminal, HTML, Web UI, Telegram digest).
+- **v0.4** — LanHound batch import in the Web UI; snapshot/label deletion and `audit.log` rotation; macOS and Windows binaries; ipinfo token.
 
 ## License
 

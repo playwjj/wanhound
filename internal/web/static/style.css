@@ -82,3 +82,5 @@ details.finding .body p { margin: 6px 0; }
 .labels a { text-decoration: none; display: block; }
 .login { max-width: 380px; margin: 40px auto; }
 td.mono { white-space: nowrap; }
+.small-btn { padding: 2px 10px; font-size: 12px; margin-top: 4px; }
+input[type=file] { font: inherit; color: var(--muted); max-width: 100%; }

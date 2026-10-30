@@ -57,9 +57,10 @@ jobs:
       - name: Build
         run: |
           mkdir dist
-          for t in linux/amd64 linux/arm64 linux/arm/7 linux/386; do
+          for t in linux/amd64 linux/arm64 linux/arm/7 linux/386 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             IFS=/ read os arch arm <<< "$t"
             name=wanhound_${GITHUB_REF_NAME}_${os}_${arch}${arm:+v$arm}
+            [ "$os" = windows ] && name=$name.exe
             GOOS=$os GOARCH=$arch GOARM=$arm CGO_ENABLED=0 go build -trimpath \
               -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" -o dist/$name ./cmd/wanhound
           done

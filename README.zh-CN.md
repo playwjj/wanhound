@@ -57,7 +57,7 @@ WanHound 是一个**防御性的自查工具**，和 nmap、Greenbone 同类，�
 
 ## 快速开始
 
-从源码构建（Go 1.25+，无其他依赖——纯标准库，单个静态二进制）：
+下载 [Releases](https://github.com/playwjj/wanhound/releases) 中的二进制（Linux、macOS、Windows），或从源码构建（Go 1.25+，无其他依赖——纯标准库，单个静态二进制）：
 
 ```bash
 git clone https://github.com/playwjj/wanhound.git
@@ -88,6 +88,10 @@ docker run --rm -v wanhound-data:/home/wanhound/.local/share/wanhound \
 ./wanhound history                       # 列出所有标签
 ./wanhound history --label home          # 时间线：地址变化、新开/关闭的端口
 ./wanhound show --label home --html report.html
+
+# 清理历史
+./wanhound delete --label home --keep 10     # 每个地址族只保留最近 10 次
+./wanhound delete --label home --id <快照编号>
 ```
 
 示例输出（节选）：
@@ -167,6 +171,9 @@ IPv6 没有 NAT，家里每台设备都有自己的公网地址，而这些地�
 - 每台设备有自己的历史标签（`home · 设备名`），所以每台设备都能单独对比变化。
 - 开始前会列出全部目标并要求确认（非交互运行需加 `--yes`）；目标数超过 `--max`（默认 32）会拒绝。
 - IPv6 隐私（临时）地址会轮换，较早看到的地址可能已失效。
+- Web 界面同样支持：在"新建审计"页底部载入 `devices.csv`，勾选设备后批量逐台审计，完成后给出每台设备的汇总表。
+
+<p align="center"><img src="docs/images/lanhound.zh.jpg" width="760" alt="Web 界面中从 LanHound 导入设备"></p>
 
 ### Web UI
 
@@ -185,7 +192,7 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
     <td width="50%"><img src="docs/images/compare.zh.jpg" alt="两次快照并排对比"><br><sub>任意两次快照并排对比——新开端口标红，地址变化有提示。</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/history.jpg" alt="按家庭标签的历史时间线"><br><sub>历史按家庭标签保存，而不是按 IP。</sub></td>
+    <td width="50%"><img src="docs/images/history.zh.jpg" alt="按家庭标签的历史时间线"><br><sub>历史按家庭标签保存，而不是按 IP。</sub></td>
     <td width="50%"><img src="docs/images/new-audit.zh.jpg" alt="新建审计表单"><br><sub>新建审计：一个 IPv4 和/或一个 IPv6，必须明确勾选授权声明。</sub></td>
   </tr>
 </table>
@@ -198,6 +205,7 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 - 登录失败会被延迟并限速（每个地址 15 分钟内 5 次，全局 30 次）。
 - 每次审计都必须勾选"我拥有这些地址或已获授权测试"才能提交，并写入只追加的 `audit.log`（目标、客户端地址、User-Agent、时间、结果），可在界面中查看。
 - 同一时间只允许一个审计任务，有全局上限（`--scans-per-hour`，默认 6 次），引擎参数浏览器端无法修改。
+- 历史页可以删除单个快照或整个标签（两步确认，记入审计日志）；`audit.log` 超过 5 MB 自动轮转为 `audit.log.1`。
 - 放在反向代理后面时，所有客户端在限速上共用代理的地址；`X-Forwarded-For` 会记入审计日志，但从不被信任。
 
 ## 工作原理
@@ -209,7 +217,7 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 ```
 
 - 纯 Go 标准库：无 cgo、不内嵌 nmap、不用原始套接字（因此不需要 `NET_RAW`，不需要 root）。
-- 地址画像（ASN/运营商，通过 ipinfo.io，失败时用 ip.sb）和出口自检（ipify / ifconfig.co / icanhazip）是探测之外仅有的对外请求，`--offline` 会全部关闭——注意：任何在线查询都必然会把被查询的地址告诉对应服务。
+- 地址画像（ASN/运营商，通过 ipinfo.io，失败时用 ip.sb；设置 `WANHOUND_IPINFO_TOKEN` 可使用 ipinfo 的 token 避免限流）和出口自检（ipify / ifconfig.co / icanhazip）是探测之外仅有的对外请求，`--offline` 会全部关闭——注意：任何在线查询都必然会把被查询的地址告诉对应服务。
 - 快照以纯 JSON 保存在 `~/.local/share/wanhound/labels/<标签>/` 下，每次运行一个文件。
 - 代码结构：`cmd/wanhound`（CLI）· `internal/audit`（CLI 与 Web 共用的审计流程）· `internal/intel`（地址分类、ASN/PTR 画像、出口）· `internal/scan`（TCP 引擎 + UDP 小集）· `internal/probe`（banner/TLS/HTTP）· `internal/knowledge`（规则库，`rules.json`）· `internal/store`（快照/对比）· `internal/report`（终端、摘要、HTML）· `internal/web`（serve 模式 + 内嵌界面）。
 
@@ -219,6 +227,7 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 - **P1 — 已完成**：TLS/HTTP 深度识别、组合规则、按标签的快照对比、扫描位置自检、UDP 小集，以及带进度、报告、历史时间线和并排对比的 Web UI 和全套访问控制。
 - **P2 — 已完成**：独立 HTML 报告导出 ✔、Telegram 推送 ✔、读取 LanHound 导出的设备清单逐个审计 IPv6 ✔（仍是单目标审计，不做网段扫描）。
 - **v0.3** — 中文报告（终端、HTML、Web 界面、Telegram 摘要）。
+- **v0.4** — Web 界面支持 LanHound 批量导入；快照/标签删除与 `audit.log` 轮转；macOS / Windows 二进制；ipinfo token。
 
 ## 已知局限
 
@@ -226,6 +235,7 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 - **扫描机上的代理和 VPN**：TUN 模式代理（Clash、Surge 等）会自己应答所有连接；WanHound 能识别"全部端口都开放"的模式并拒绝扫描，但分流配置下仍可能有部分探测经过代理。请在干净的机器上运行。
 - **动态 IP**：历史按标签保存，但地址变化后，新旧两次结果可能描述的不是同一条线路——报告会标出地址变化。
 - **共享出口**：在运营商级 NAT 下，"查看我的 IP"网站显示的是与其他用户共享的出口。WanHound 会拒绝 `100.64.0.0/10`，并在运营商画像像移动/CGNAT 运营商时给出提示，但无法证明哪个地址是你的——请使用路由器 WAN 口显示的地址。
+- **ICMP 拒绝在 Linux 上读作关闭**：防火墙用"端口不可达"拒绝时，Linux 的 connect() 报告的错误和 TCP 复位完全相同，因此显示为 closed（就暴露面而言确实是关闭的）；"管理性禁止"等其他 ICMP 拒绝显示为 filtered。
 - **UDP 判定模糊**：没有回应无法区分开放与被过滤；UDP 结论仅供参考。
 - **识别靠指纹**：banner 和标题是证据，不是证明；结论会展示证据和置信度。
 - **IPv6 范围 = 你提供的地址**：IPv6 地址空间无法枚举；没提供的设备不在审计范围内。

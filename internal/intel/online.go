@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -70,6 +71,11 @@ func getJSON(ctx context.Context, url string, v any) error {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "WanHound")
+	// An ipinfo.io token lifts the anonymous rate limit (free tier is
+	// plenty for a home); set WANHOUND_IPINFO_TOKEN to use one.
+	if tok := os.Getenv("WANHOUND_IPINFO_TOKEN"); tok != "" && req.URL.Host == "ipinfo.io" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

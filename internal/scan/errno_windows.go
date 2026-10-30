@@ -19,4 +19,5 @@ func isRefused(err error) bool {
 	return errors.Is(err, wsaECONNREFUSED) || errors.Is(err, wsaECONNRESET) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
-var localTransient = []syscall.Errno{wsaEMFILE, wsaENOBUFS, wsaEADDRNOTAVAIL}
+var localTransient = []syscall.Errno{wsaEMFILE, wsaENOBUFS, wsaEADDRNOTAVAIL,
+	syscall.EMFILE, syscall.ENOBUFS, syscall.EADDRNOTAVAIL} // Go's portable values too

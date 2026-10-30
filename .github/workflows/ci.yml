@@ -22,6 +22,27 @@ jobs:
       - name: Build
         run: go build -trimpath -o wanhound ./cmd/wanhound
 
+  # Unit and integration tests on the other release platforms: Winsock
+  # and BSD socket error semantics differ from Linux.
+  test-os:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+
   # Acceptance bench: a container with known open/closed/filtered ports
   # (iptables DROP/REJECT inside its own namespace), audited end to end.
   testbed:

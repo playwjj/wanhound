@@ -156,6 +156,21 @@ Notes on the report:
 | `--data-dir` | `~/.local/share/wanhound` | Or `WANHOUND_DATA`. |
 | `--lang` | from locale | Report language: `en` / `zh` (or `WANHOUND_LANG`; a `zh_*` locale picks Chinese). |
 
+### Accepted risks: alert only on what is new
+
+Some findings you cannot fix right away — an ISP modem whose settings you cannot change, say. Record them as accepted, with a reason and an expiry, so scheduled audits stay quiet about them and alert only on new problems:
+
+```bash
+./wanhound accept --label home --rule KU-001 --port 53 --reason "ISP modem DNS; bridge mode planned" --days 90
+./wanhound accept --list
+./wanhound accept --remove <id>
+```
+
+- An accepted finding stays in every report, marked as accepted with its reason, but no longer counts towards the worst risk, the exit code or Telegram alerts — and no longer feeds the whole-target combination rules.
+- Acceptances are per label, rule and port, and expire (at most a year): after that the finding alerts again and the report says the acceptance lapsed.
+- Newly opened ports always alert.
+- In the Web UI every finding has an "Accept this risk…" button; the *Accepted risks* page lists and removes them. Every decision is audit-logged.
+
 ### With LanHound: every device's IPv6, one by one
 
 IPv6 has no NAT: each device at home has its own public address, and those addresses are only visible from inside the LAN. Hand WanHound the device table exported by [LanHound](https://github.com/playwjj/lanhound) (the CSV export of its device list, `/api/devices.csv`) and it audits each device's public IPv6 address **one at a time** — still single-target audits, never a range scan:
@@ -223,6 +238,7 @@ address ──▶ classify (public? CGNAT? private?) ──▶ connect-scan (3-s
 - **P1 — done** — TLS/HTTP deep identification, combination rules, per-label snapshot diff, vantage-point self-checks, UDP probe set, Web UI with progress, report, history timeline and side-by-side diff, plus the full access-control set.
 - **P2 — done** — standalone HTML report export ✔, Telegram push ✔, auditing each device's IPv6 from a LanHound export ✔ (one by one — still no range scanning).
 - **v0.3** — Simplified Chinese reports (terminal, HTML, Web UI, Telegram digest).
+- **v0.5** — accepted risks (reason + expiry; quiet until they lapse); clearer egress status; SNI-only TLS ports recognized as HTTPS.
 - **v0.4** — LanHound batch import in the Web UI; snapshot/label deletion and `audit.log` rotation; macOS and Windows binaries; ipinfo token.
 
 ## Known limitations

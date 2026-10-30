@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/playwjj/wanhound/internal/knowledge"
 	"github.com/playwjj/wanhound/internal/probe"
 )
 
@@ -150,5 +151,50 @@ func TestDeleteAndPrune(t *testing.T) {
 	}
 	if labels, _ := st.Labels(); len(labels) != 0 {
 		t.Errorf("labels after DeleteLabel = %v", labels)
+	}
+}
+
+func TestAcceptances(t *testing.T) {
+	st, _ := Open(t.TempDir())
+	if _, err := st.Accept("home", "KU-001", 53, "", 30); err == nil {
+		t.Error("a reason must be required")
+	}
+	if _, err := st.Accept("home", "KU-001", 53, "router DNS; bridge mode planned", 400); err == nil {
+		t.Error("over the maximum days must be refused")
+	}
+	a, err := st.Accept("home", "KU-001", 53, "router DNS; bridge mode planned", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Re-accepting the same risk replaces, not duplicates.
+	if _, err := st.Accept("home", "KU-001", 53, "updated reason", 30); err != nil {
+		t.Fatal(err)
+	}
+	as, _ := st.Acceptances()
+	if len(as) != 1 || as[0].Reason != "updated reason" {
+		t.Fatalf("acceptances = %+v", as)
+	}
+
+	fs := []knowledge.Finding{
+		{RuleID: "KU-001", Port: 53, Proto: "udp", Risk: knowledge.RiskHigh},
+		{RuleID: "KH-016", Port: 53, Proto: "tcp", Risk: knowledge.RiskMedium},
+	}
+	if exp := ApplyAcceptances(fs, "home", as, time.Now()); len(exp) != 0 {
+		t.Errorf("nothing should be expired: %v", exp)
+	}
+	if fs[0].Accepted == nil || fs[1].Accepted != nil {
+		t.Errorf("only KU-001 on 53 should be accepted: %+v", fs)
+	}
+	if knowledge.MaxRisk(fs) != knowledge.RiskMedium {
+		t.Errorf("accepted findings must not count towards the worst risk")
+	}
+	if ApplyAcceptances(fs, "other-home", as, time.Now()); fs[0].Accepted != nil {
+		t.Error("acceptances are per label")
+	}
+	if exp := ApplyAcceptances(fs, "home", as, time.Now().AddDate(0, 0, 31)); len(exp) != 1 || fs[0].Accepted != nil {
+		t.Error("an expired acceptance must stop applying and be reported")
+	}
+	if err := st.Unaccept(as[0].ID); err != nil || st.Unaccept(a.ID) == nil {
+		t.Errorf("unaccept: %v", err)
 	}
 }

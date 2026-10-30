@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/playwjj/wanhound/internal/audit"
 	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/intel"
+	"github.com/playwjj/wanhound/internal/knowledge"
 	"github.com/playwjj/wanhound/internal/lanhound"
 	"github.com/playwjj/wanhound/internal/scan"
+	"github.com/playwjj/wanhound/internal/store"
 )
 
 // maxBatch caps a LanHound batch: a home, not a hosting provider.
@@ -142,5 +145,72 @@ func (s *Server) handleDeleteLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, map[string]any{"action": "label_deleted", "label": b.Label})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// markAccepted shows a stored snapshot with today's accepted-risk
+// decisions, so accepting a finding is reflected immediately.
+func (s *Server) markAccepted(snap *store.Snapshot) {
+	if as, err := s.st.Acceptances(); err == nil {
+		store.ApplyAcceptances(snap.Findings, snap.Label, as, time.Now())
+	}
+}
+
+func (s *Server) handleAccepted(w http.ResponseWriter, r *http.Request) {
+	as, err := s.st.Acceptances()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	type row struct {
+		store.Acceptance
+		Active bool `json:"active"`
+	}
+	out := []row{}
+	for _, a := range as {
+		out = append(out, row{a, a.Active(time.Now())})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Label  string `json:"label"`
+		RuleID string `json:"rule_id"`
+		Port   int    `json:"port"`
+		Reason string `json:"reason"`
+		Days   int    `json:"days"`
+	}
+	if err := readJSON(r, &b); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !knowledge.KnownID(b.RuleID) {
+		writeErr(w, http.StatusBadRequest, "unknown rule")
+		return
+	}
+	a, err := s.st.Accept(b.Label, b.RuleID, b.Port, b.Reason, b.Days)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, map[string]any{"action": "risk_accepted", "label": a.Label, "rule": a.RuleID, "port": a.Port,
+		"until": a.Until.Format(time.RFC3339), "reason": a.Reason, "id": a.ID})
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *Server) handleUnaccept(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		ID string `json:"id"`
+	}
+	if err := readJSON(r, &b); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.st.Unaccept(b.ID); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	s.audit(r, map[string]any{"action": "risk_unaccepted", "id": b.ID})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

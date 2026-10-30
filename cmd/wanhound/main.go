@@ -57,6 +57,8 @@ func main() {
 		err = runHistory(os.Args[2:])
 	case "delete":
 		err = runDelete(os.Args[2:])
+	case "accept":
+		err = runAccept(os.Args[2:])
 	case "show":
 		err = runShow(os.Args[2:])
 	case "rules":
@@ -95,6 +97,7 @@ Usage:
   wanhound history [--label <name>]
   wanhound show    --label <name> [--id <snapshot-id>] [--json | --html <file>]
   wanhound delete  --label <name> (--id <snapshot-id> | --keep <n> | --all)
+  wanhound accept  --label <name> --rule <id> [--port <n>] --reason "<why>" [--days 30]   | --list | --remove <id>
   wanhound rules   list the built-in rule base
   wanhound hash-password   read a password on stdin, print a hash for WANHOUND_PASSWORD_HASH
 
@@ -381,6 +384,64 @@ func runDelete(args []string) error {
 	return err
 }
 
+func runAccept(args []string) error {
+	fs := flag.NewFlagSet("accept", flag.ContinueOnError)
+	label := fs.String("label", "home", "label the finding belongs to")
+	rule := fs.String("rule", "", "rule ID of the finding, e.g. KU-001")
+	port := fs.Int("port", 0, "port of the finding (0 for whole-target KC-* findings)")
+	reason := fs.String("reason", "", "why this risk is acceptable for now (required)")
+	days := fs.Int("days", 30, fmt.Sprintf("how long the acceptance lasts (1-%d days)", store.MaxAcceptDays))
+	list := fs.Bool("list", false, "list accepted risks")
+	remove := fs.String("remove", "", "remove an accepted risk by ID")
+	dataDir := fs.String("data-dir", envOr("WANHOUND_DATA", ""), "snapshot directory")
+	if err := fs.Parse(args); err != nil {
+		return exitError(2)
+	}
+	st, err := store.Open(*dataDir)
+	if err != nil {
+		return err
+	}
+	switch {
+	case *list:
+		as, err := st.Acceptances()
+		if err != nil {
+			return err
+		}
+		if len(as) == 0 {
+			fmt.Println("No accepted risks.")
+		}
+		now := time.Now()
+		for _, a := range as {
+			state := "active"
+			if !a.Active(now) {
+				state = "EXPIRED"
+			}
+			fmt.Printf("%s  %-7s %-24s %-7s port %-5d until %s  %s\n", a.ID, state, a.Label, a.RuleID, a.Port, a.Until.Local().Format("2006-01-02"), a.Reason)
+		}
+		return nil
+	case *remove != "":
+		if err := st.Unaccept(*remove); err != nil {
+			return err
+		}
+		fmt.Println("removed", *remove)
+		return nil
+	}
+	if *rule == "" {
+		fmt.Fprintln(os.Stderr, "accept: give --rule (and --port, --reason), or --list / --remove")
+		return exitError(2)
+	}
+	if !knowledge.KnownID(*rule) {
+		return fmt.Errorf("unknown rule %q (see `wanhound rules`)", *rule)
+	}
+	a, err := st.Accept(*label, *rule, *port, *reason, *days)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("accepted %s on port %d for label %q until %s (id %s)\n", a.RuleID, a.Port, a.Label, a.Until.Local().Format("2006-01-02"), a.ID)
+	fmt.Println("It stays in reports, marked as accepted, but no longer raises the exit code or Telegram alerts.")
+	return nil
+}
+
 func runShow(args []string) error {
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	label := fs.String("label", "home", "label")
@@ -396,6 +457,7 @@ func runShow(args []string) error {
 	if err != nil {
 		return err
 	}
+	acc, _ := st.Acceptances()
 	var snap *store.Snapshot
 	if *id != "" {
 		snap, err = st.Get(*label, *id)
@@ -412,6 +474,7 @@ func runShow(args []string) error {
 	if snap == nil {
 		return fmt.Errorf("no snapshots under label %q", *label)
 	}
+	store.ApplyAcceptances(snap.Findings, snap.Label, acc, time.Now()) // show the current decisions
 	rep := &audit.Report{Label: snap.Label, Started: snap.Time, Duration: snap.Duration,
 		RulesVersion: snap.RulesVersion, Targets: []*store.Snapshot{snap}, Offline: snap.Intel == nil}
 	switch {

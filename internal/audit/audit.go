@@ -312,7 +312,24 @@ func auditOne(ctx context.Context, st *store.Store, req Request, addr string, po
 	if ctx.Err() != nil {
 		return nil, nil, ctx.Err()
 	}
-	snap.Findings = knowledge.Evaluate(knowledge.Target{Family: family, TCP: snap.Open, UDP: snap.UDP})
+	// Known, accepted risks stay in the report but stop driving alerts,
+	// and do not feed the whole-target combination rules.
+	target := knowledge.Target{Family: family, TCP: snap.Open, UDP: snap.UDP}
+	as, err := st.Acceptances()
+	if err != nil {
+		return nil, nil, err
+	}
+	snap.Findings = knowledge.PortFindings(target)
+	expired := store.ApplyAcceptances(snap.Findings, req.Label, as, time.Now())
+	snap.Findings = knowledge.Combine(target, snap.Findings)
+	expired = append(expired, store.ApplyAcceptances(snap.Findings, req.Label, as, time.Now())...)
+	seen := map[string]bool{}
+	for _, a := range expired {
+		if !seen[a.ID] {
+			seen[a.ID] = true
+			snap.Notes = append(snap.Notes, i18n.M("note.accept_expired", a.RuleID, a.Port, a.Until.Format("2006-01-02"), a.Reason))
+		}
+	}
 	snap.Duration = time.Since(res.StartedAt)
 
 	if family == "v4" && o > 0 {

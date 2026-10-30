@@ -148,6 +148,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/lanhound/scan", s.auth(http.HandlerFunc(s.handleLanHoundScan)))
 	mux.Handle("POST /api/snapshot/delete", s.auth(http.HandlerFunc(s.handleDeleteSnapshot)))
 	mux.Handle("POST /api/label/delete", s.auth(http.HandlerFunc(s.handleDeleteLabel)))
+	mux.Handle("GET /api/accepted", s.auth(http.HandlerFunc(s.handleAccepted)))
+	mux.Handle("POST /api/accept", s.auth(http.HandlerFunc(s.handleAccept)))
+	mux.Handle("POST /api/accept/remove", s.auth(http.HandlerFunc(s.handleUnaccept)))
 	return securityHeaders(mux)
 }
 
@@ -438,6 +441,7 @@ func (s *Server) loadSnapshot(w http.ResponseWriter, r *http.Request, idParam st
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if snap := s.loadSnapshot(w, r, "id"); snap != nil {
+		s.markAccepted(snap)
 		writeJSON(w, http.StatusOK, snap.Localized(langOf(r)))
 	}
 }
@@ -447,6 +451,7 @@ func (s *Server) handleSnapshotHTML(w http.ResponseWriter, r *http.Request) {
 	if snap == nil {
 		return
 	}
+	s.markAccepted(snap)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="wanhound-%s.html"`, snap.ID))
 	// The exported page is standalone (inline CSS) and must render when
@@ -466,6 +471,8 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	if b.Time.Before(a.Time) {
 		a, b = b, a
 	}
+	s.markAccepted(a)
+	s.markAccepted(b)
 	lang := langOf(r)
 	ch := store.Diff(a, b)
 	if ch.Coverage != nil {

@@ -204,3 +204,17 @@ func TestRefusedTLSIsHTTPS(t *testing.T) {
 		t.Error("port-only KH-020 must not apply once TLS is recognized")
 	}
 }
+
+func TestAcceptedFindingsDoNotFeedCombos(t *testing.T) {
+	tgt := Target{Family: "v4", TCP: []probe.Info{{Port: 3306}}}
+	fs := PortFindings(tgt)
+	if m := ids(Combine(tgt, append([]Finding(nil), fs...))); m["KC-002"].RuleID == "" {
+		t.Fatal("exposed database should trigger KC-002")
+	}
+	for i := range fs {
+		fs[i].Accepted = &Acceptance{ID: "x", Reason: "known"}
+	}
+	if m := ids(Combine(tgt, fs)); m["KC-002"].RuleID != "" {
+		t.Error("an accepted database finding must not trigger KC-002")
+	}
+}

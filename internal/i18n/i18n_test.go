@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-var verb = regexp.MustCompile(`%[-+# 0]*[0-9]*[sdqv]`)
+var verb = regexp.MustCompile(`%(\[[0-9]+\])?[-+# 0]*[0-9]*[sdqv]`)
 
 // Every key exists in both languages with the same placeholders, so a
 // translation can never drop or reorder an argument.

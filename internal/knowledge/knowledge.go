@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/playwjj/wanhound/internal/i18n"
 	"github.com/playwjj/wanhound/internal/probe"
@@ -153,6 +154,17 @@ type Finding struct {
 	// recognized (it speaks HTTP/TLS), "low" for port number alone.
 	Confidence string   `json:"confidence,omitempty"`
 	Tags       []string `json:"tags,omitempty"`
+	// Accepted is set when the user has recorded this risk as known and
+	// accepted: the finding is still reported, but no longer counts
+	// towards the worst risk or the alert exit code.
+	Accepted *Acceptance `json:"accepted,omitempty"`
+}
+
+// Acceptance is the user's record that a finding is a known risk.
+type Acceptance struct {
+	ID     string    `json:"id"`
+	Reason string    `json:"reason"`
+	Until  time.Time `json:"until"`
 }
 
 //go:embed rules.json
@@ -288,6 +300,25 @@ func Parse(data []byte) (*Base, error) {
 	return &b, nil
 }
 
+// KnownID reports whether id names a rule or combination rule (KH-000,
+// the unknown-port fallback, included).
+func KnownID(id string) bool {
+	if id == "KH-000" {
+		return true
+	}
+	for _, r := range base.Rules {
+		if r.ID == id {
+			return true
+		}
+	}
+	for _, c := range base.Combos {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // Version is the embedded rule base version.
 func Version() string { return base.Version }
 
@@ -304,8 +335,27 @@ type Target struct {
 // Evaluate returns all findings for a target, worst first.
 func Evaluate(t Target) []Finding { return base.Evaluate(t) }
 
+// PortFindings returns only the per-port findings (no combinations), so
+// a caller can mark accepted risks before Combine runs.
+func PortFindings(t Target) []Finding { return base.portFindings(t) }
+
+// Combine appends the whole-target combination findings to fs and sorts
+// the result. Accepted findings do not feed combinations.
+func Combine(t Target, fs []Finding) []Finding {
+	out := append(fs, base.combos(t, fs)...)
+	SortFindings(out)
+	return out
+}
+
 // Evaluate runs this rule base against t.
 func (b *Base) Evaluate(t Target) []Finding {
+	out := b.portFindings(t)
+	out = append(out, b.combos(t, out)...)
+	SortFindings(out)
+	return out
+}
+
+func (b *Base) portFindings(t Target) []Finding {
 	var out []Finding
 	for _, info := range t.TCP {
 		out = append(out, b.lookup("tcp", info.Port, facts(info))...)
@@ -316,8 +366,6 @@ func (b *Base) Evaluate(t Target) []Finding {
 		}
 		out = append(out, b.lookup("udp", u.Port, evidence{detail: u.Detail, text: u.Detail})...)
 	}
-	out = append(out, b.combos(t, out)...)
-	SortFindings(out)
 	return out
 }
 
@@ -450,6 +498,9 @@ func (m *Match) matches(port int, ev evidence) (confidence string, ok bool) {
 func (b *Base) combos(t Target, fs []Finding) []Finding {
 	tags := map[string][]int{}
 	for _, f := range fs {
+		if f.Accepted != nil {
+			continue // an accepted risk does not feed whole-target rules
+		}
 		for _, tag := range f.Tags {
 			tags[tag] = append(tags[tag], f.Port)
 		}
@@ -518,11 +569,12 @@ func SortFindings(fs []Finding) {
 	})
 }
 
-// MaxRisk returns the highest risk in fs, or RiskInfo when empty.
+// MaxRisk returns the highest risk among findings that are not accepted,
+// or RiskInfo when there are none.
 func MaxRisk(fs []Finding) Risk {
 	m := RiskInfo
 	for _, f := range fs {
-		if f.Risk > m {
+		if f.Accepted == nil && f.Risk > m {
 			m = f.Risk
 		}
 	}

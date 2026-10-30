@@ -57,6 +57,10 @@ const L = {
     lh_too_many: "Select at most {0} devices.", ps_quick_short: "Quick set (recommended for many devices)", ps_full_short: "All ports",
     batch: "Device {0} of {1}: {2}", batch_summary: "Devices", col_ipv6: "IPv6", col_new: "New", col_worst: "Worst",
     del: "Delete", del_confirm: "Confirm delete", del_label: "Delete this label and its history", deleted: "Deleted.",
+    accepted: "ACCEPTED", accepted_line: "Accepted risk: {0} (until {1})", accept_btn: "Accept this risk…", accept_reason: "Why is this acceptable for now?",
+    accept_days: "for", accept_save: "Accept", unaccept: "Undo acceptance", days_n: "{0} days", accept_note: "Accepted risks stay in the report but no longer raise alerts or the exit code. They expire, so you look again.",
+    nav_accepted: "Accepted risks", acc_title: "Accepted risks", acc_none: "No accepted risks.", col_label: "Label", col_rule: "Rule", col_until: "Until", col_reason: "Reason",
+    acc_expired: "expired", acc_remove: "Remove",
   },
   zh: {
     signin: "登录", signin_note: "这台 WanHound 服务器受口令保护，每次审计都会被记录。", password: "口令",
@@ -104,6 +108,10 @@ const L = {
     lh_too_many: "最多选择 {0} 台设备。", ps_quick_short: "快速集（设备多时推荐）", ps_full_short: "全部端口",
     batch: "第 {0}/{1} 台设备：{2}", batch_summary: "设备", col_ipv6: "IPv6", col_new: "新开放", col_worst: "最高风险",
     del: "删除", del_confirm: "确认删除", del_label: "删除此标签及全部历史", deleted: "已删除。",
+    accepted: "已接受", accepted_line: "已接受的风险：{0}（有效至 {1}）", accept_btn: "接受此风险…", accept_reason: "为什么暂时可以接受？",
+    accept_days: "有效期", accept_save: "接受", unaccept: "撤销接受", days_n: "{0} 天", accept_note: "已接受的风险仍会出现在报告中，但不再触发告警和退出码。到期后会重新告警，提醒你再看一次。",
+    nav_accepted: "已接受风险", acc_title: "已接受的风险", acc_none: "没有已接受的风险。", col_label: "标签", col_rule: "规则", col_until: "有效至", col_reason: "理由",
+    acc_expired: "已过期", acc_remove: "移除",
   },
 };
 
@@ -515,13 +523,15 @@ function renderSnapshot(s) {
   card.append(el("h3", {}, tr("findings")));
   if (!(s.findings || []).length) card.append(el("div", { class: "good" }, tr("nothing")));
   for (const f of s.findings || []) {
-    card.append(el("details", { class: "finding " + f.risk, open: f.risk === "high" },
-      el("summary", {}, badge(f.risk), el("span", { class: "mono" }, where(f)), el("b", {}, f.title), el("span", { class: "muted small" }, f.rule_id)),
+    card.append(el("details", { class: "finding " + f.risk + (f.accepted ? " accepted" : ""), open: f.risk === "high" && !f.accepted },
+      el("summary", {}, badge(f.risk), f.accepted ? el("span", { class: "badge info" }, tr("accepted")) : null,
+        el("span", { class: "mono" }, where(f)), el("b", {}, f.title), el("span", { class: "muted small" }, f.rule_id)),
       el("div", { class: "body" },
         f.evidence ? el("p", {}, el("span", { class: "k" }, tr("evidence")), el("code", {}, f.evidence)) : null,
         el("p", {}, el("span", { class: "k" }, tr("what")), f.explain),
         el("p", {}, el("span", { class: "k" }, tr("todo")), f.advice),
-        el("p", { class: "small muted" }, el("span", { class: "k" }, tr("rule")), f.rule_id, f.confidence ? tr("confidence", tr("conf_" + f.confidence)) : ""))));
+        el("p", { class: "small muted" }, el("span", { class: "k" }, tr("rule")), f.rule_id, f.confidence ? tr("confidence", tr("conf_" + f.confidence)) : ""),
+        acceptControl(s, f))));
   }
   if ((s.notes || []).length) card.append(el("ul", { class: "small muted" }, s.notes.map((n) => el("li", {}, txt(n)))));
   card.append(el("p", { class: "small muted" },
@@ -529,6 +539,56 @@ function renderSnapshot(s) {
     el("a", { href: "/api/snapshot/html?" + q({ label: s.label, id: s.id, lang }) }, tr("dl_html")), " · ",
     el("a", { href: "#/history/" + encodeURIComponent(s.label) }, tr("history"))));
   return [card];
+}
+
+// acceptControl: record a finding as a known, accepted risk (with a
+// reason and an expiry), or undo that.
+function acceptControl(s, f) {
+  const box = el("div", { class: "accept" });
+  if (f.accepted) {
+    box.append(el("p", { class: "small" }, tr("accepted_line", f.accepted.reason, new Date(f.accepted.until).toLocaleDateString())),
+      confirmButton(tr("unaccept"), async () => {
+        await api("POST", "/api/accept/remove", { id: f.accepted.id });
+        route();
+      }));
+    return box;
+  }
+  const open = el("button", { type: "button", class: "small-btn" }, tr("accept_btn"));
+  open.addEventListener("click", () => {
+    const reason = el("input", { type: "text", maxlength: 300, placeholder: tr("accept_reason"), "aria-label": tr("accept_reason") });
+    const days = el("select", { "aria-label": tr("accept_days") }, [30, 90, 180, 365].map((d) => el("option", { value: d }, tr("days_n", d))));
+    const msg = el("div");
+    const save = el("button", { type: "button", class: "primary small-btn" }, tr("accept_save"));
+    save.addEventListener("click", async () => {
+      msg.replaceChildren();
+      save.disabled = true;
+      try {
+        await api("POST", "/api/accept", { label: s.label, rule_id: f.rule_id, port: f.port || 0, reason: reason.value, days: +days.value });
+        route();
+      } catch (err) { msg.append(errorBox(err.message)); save.disabled = false; }
+    });
+    box.replaceChildren(el("p", { class: "small muted" }, tr("accept_note")), reason,
+      el("div", { class: "row" }, el("span", { class: "small muted" }, tr("accept_days")), days, save), msg);
+    reason.focus();
+  });
+  box.append(open);
+  return box;
+}
+
+async function viewAccepted() {
+  let rows;
+  try { rows = await api("GET", "/api/accepted"); } catch (_) { return; }
+  const body = rows.length ? el("div", { class: "scroll" }, el("table", { class: "tbl" },
+    el("thead", {}, el("tr", {}, el("th", {}, tr("col_label")), el("th", {}, tr("col_rule")), el("th", {}, tr("col_port")),
+      el("th", {}, tr("col_until")), el("th", {}, tr("col_reason")), el("th", {}, ""))),
+    el("tbody", {}, rows.map((a) => el("tr", { class: a.active ? "" : "r-medium" },
+      el("td", {}, el("a", { href: "#/history/" + encodeURIComponent(a.label) }, a.label)), el("td", { class: "mono" }, a.rule_id),
+      el("td", { class: "mono" }, a.port || "—"),
+      el("td", {}, new Date(a.until).toLocaleDateString(), a.active ? "" : " · " + tr("acc_expired")),
+      el("td", {}, a.reason),
+      el("td", {}, confirmButton(tr("acc_remove"), async () => { await api("POST", "/api/accept/remove", { id: a.id }); viewAccepted(); }))))))) :
+    el("p", { class: "muted" }, tr("acc_none"));
+  setView(el("h1", {}, tr("acc_title")), el("p", { class: "muted small" }, tr("accept_note")), el("div", { class: "card" }, body));
 }
 
 function stat(v, label) { return el("div", { class: "stat" }, el("b", {}, String(v)), el("span", { class: "muted small" }, label)); }
@@ -678,6 +738,7 @@ function route() {
     case "snap": return viewSnapshot(parts[1], parts[2]);
     case "diff": return viewDiff(parts[1], parts[2], parts[3]);
     case "log": return viewLog();
+    case "accepted": return viewAccepted();
     default: location.hash = "#/";
   }
 }

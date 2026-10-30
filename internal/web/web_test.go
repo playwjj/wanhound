@@ -76,6 +76,7 @@ func TestUnauthenticatedIsRejected(t *testing.T) {
 		{"POST", "/api/scan"}, {"POST", "/api/task/cancel"}, {"POST", "/api/logout"},
 		{"POST", "/api/lanhound/preview"}, {"POST", "/api/lanhound/scan"},
 		{"POST", "/api/snapshot/delete"}, {"POST", "/api/label/delete"},
+		{"GET", "/api/accepted"}, {"POST", "/api/accept"}, {"POST", "/api/accept/remove"},
 	} {
 		if r := do(t, c, ep.m, ts.URL+ep.p, "", true); r.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s %s without session = %d, want 401", ep.m, ep.p, r.StatusCode)
@@ -270,5 +271,30 @@ func TestNoInlineStyles(t *testing.T) {
 				t.Errorf("%s uses an inline style (%s) that the CSP blocks; use a CSS class", f, bad)
 			}
 		}
+	}
+}
+
+func TestAcceptEndpoints(t *testing.T) {
+	s, ts := newTestServer(t)
+	c := login(t, ts)
+	if r := do(t, c, "POST", ts.URL+"/api/accept", `{"label":"home","rule_id":"KX-999","port":53,"reason":"x","days":30}`, true); r.StatusCode != 400 {
+		t.Errorf("unknown rule = %d, want 400", r.StatusCode)
+	}
+	if r := do(t, c, "POST", ts.URL+"/api/accept", `{"label":"home","rule_id":"KU-001","port":53,"reason":"","days":30}`, true); r.StatusCode != 400 {
+		t.Errorf("empty reason = %d, want 400", r.StatusCode)
+	}
+	if r := do(t, c, "POST", ts.URL+"/api/accept", `{"label":"home","rule_id":"KU-001","port":53,"reason":"ISP modem DNS; bridge mode later","days":30}`, true); r.StatusCode != 200 {
+		t.Fatalf("accept = %d", r.StatusCode)
+	}
+	as, _ := s.st.Acceptances()
+	if len(as) != 1 {
+		t.Fatalf("acceptances = %v", as)
+	}
+	if r := do(t, c, "POST", ts.URL+"/api/accept/remove", `{"id":"`+as[0].ID+`"}`, true); r.StatusCode != 200 {
+		t.Errorf("remove = %d", r.StatusCode)
+	}
+	data, _ := os.ReadFile(filepath.Join(s.st.Dir(), "audit.log"))
+	if !strings.Contains(string(data), `"action":"risk_accepted"`) || !strings.Contains(string(data), `"action":"risk_unaccepted"`) {
+		t.Error("accepting and removing must be audit-logged")
 	}
 }

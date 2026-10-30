@@ -20,7 +20,7 @@ th { color:var(--muted); font-weight:600; } code { font-family:ui-monospace,Menl
 .badge { display:inline-block; min-width:62px; text-align:center; border-radius:999px; padding:1px 8px; font-size:12px; font-weight:700; color:#fff; }
 .high { background:var(--high); } .medium { background:var(--medium); } .low { background:var(--low); } .info,.none { background:var(--info); }
 .finding { border-left:4px solid var(--line); padding:8px 12px; margin:10px 0; }
-.finding.f-high { border-color:var(--high); } .finding.f-medium { border-color:var(--medium); } .finding.f-low { border-color:var(--low); }
+.finding.f-high { border-color:var(--high); } .finding.accepted { opacity:.7; border-left-style:dashed; } .finding.f-medium { border-color:var(--medium); } .finding.f-low { border-color:var(--low); }
 .finding p { margin:4px 0; } .k { color:var(--muted); display:inline-block; min-width:72px; }
 .new { color:var(--high); font-weight:700; } .gone { color:var(--ok); } .warn { color:var(--medium); }
 footer { margin-top:24px; font-size:13px; color:var(--muted); }
@@ -57,11 +57,12 @@ footer { margin-top:24px; font-size:13px; color:var(--muted); }
   {{if .UDP}}<p class="small muted">{{t $.Lang "h.udp"}} {{range $i, $u := .UDP}}{{if $i}} · {{end}}{{$u.Port}} {{t $.Lang (printf "udp.%s" $u.State.String)}}{{end}}</p>{{end}}
 
   {{range .Findings}}
-  <div class="finding f-{{risk .Risk}}">
-    <p><span class="badge {{risk .Risk}}">{{upper (t $.Lang (printf "risk.%s" (risk .Risk)))}}</span> <b>{{where . $.Lang}}</b> — <b>{{.Title}}</b> <span class="muted small">{{.RuleID}}{{if .Confidence}}{{t $.Lang "r.confidence" (t $.Lang (printf "conf.%s" .Confidence))}}{{end}}</span></p>
+  <div class="finding f-{{risk .Risk}}{{if .Accepted}} accepted{{end}}">
+    <p><span class="badge {{risk .Risk}}">{{upper (t $.Lang (printf "risk.%s" (risk .Risk)))}}</span>{{if .Accepted}} <span class="badge info">{{t $.Lang "r.accepted"}}</span>{{end}} <b>{{where . $.Lang}}</b> — <b>{{.Title}}</b> <span class="muted small">{{.RuleID}}{{if .Confidence}}{{t $.Lang "r.confidence" (t $.Lang (printf "conf.%s" .Confidence))}}{{end}}</span></p>
     {{if .Evidence}}<p class="small"><span class="k">{{t $.Lang "h.evidence"}}</span><code>{{.Evidence}}</code></p>{{end}}
     <p><span class="k">{{t $.Lang "h.what"}}</span>{{.Explain}}</p>
     <p><span class="k">{{t $.Lang "h.do"}}</span>{{.Advice}}</p>
+    {{with .Accepted}}<p class="small muted">{{t $.Lang "r.accepted_line" .Reason (when .Until)}}</p>{{end}}
   </div>
   {{else}}<p class="gone">{{t $.Lang "r.nothing"}}</p>{{end}}
 

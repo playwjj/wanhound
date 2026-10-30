@@ -105,8 +105,12 @@ func (p printer) target(s *store.Snapshot) {
 		fmt.Fprintf(w, "\n  %s %s %s %s\n", pad(p.t("r.col_port"), 10), pad(p.t("r.col_service"), 26), pad(p.t("r.col_risk"), 7), p.t("r.col_finding"))
 		for _, o := range s.Open {
 			top := byPort[o.Port][0]
+			title, color := top.Title, c.risk(top.Risk)
+			if top.Accepted != nil {
+				title, color = title+" ("+p.t("r.accepted")+")", c.dim
+			}
 			fmt.Fprintf(w, "  %s %s %s%s%s %s\n", pad(fmt.Sprintf("%d/tcp", o.Port), 10), pad(trunc(top.Service, 26), 26),
-				c.risk(top.Risk), pad(strings.ToUpper(p.riskName(top.Risk)), 7), c.reset, top.Title)
+				color, pad(strings.ToUpper(p.riskName(top.Risk)), 7), c.reset, title)
 		}
 	}
 	if len(s.UDP) > 0 {
@@ -126,7 +130,11 @@ func (p printer) target(s *store.Snapshot) {
 			if f.Port != 0 {
 				where = fmt.Sprintf("%d/%s", f.Port, f.Proto)
 			}
-			fmt.Fprintf(w, "\n%s[%s]%s %s  %s%s%s  %s(%s", c.risk(f.Risk), strings.ToUpper(p.riskName(f.Risk)), c.reset,
+			label, color := strings.ToUpper(p.riskName(f.Risk)), c.risk(f.Risk)
+			if f.Accepted != nil {
+				label, color = label+"·"+p.t("r.accepted"), c.dim
+			}
+			fmt.Fprintf(w, "\n%s[%s]%s %s  %s%s%s  %s(%s", color, label, c.reset,
 				where, c.bold, f.Title, c.reset, c.dim, f.RuleID)
 			if f.Confidence != "" {
 				fmt.Fprint(w, p.t("r.confidence", p.t("conf."+f.Confidence)))
@@ -137,6 +145,9 @@ func (p printer) target(s *store.Snapshot) {
 			}
 			fmt.Fprintf(w, "    %s  %s\n", pad(p.t("r.what"), 8), f.Explain)
 			fmt.Fprintf(w, "    %s  %s\n", pad(p.t("r.do"), 8), f.Advice)
+			if a := f.Accepted; a != nil {
+				fmt.Fprintf(w, "    %s%s%s\n", c.dim, p.t("r.accepted_line", a.Reason, a.Until.Local().Format("2006-01-02")), c.reset)
+			}
 		}
 	}
 	if len(s.Notes) > 0 {
@@ -213,7 +224,12 @@ func Summary(rep *audit.Report, lang string) string {
 				b.WriteString(t("s.closed", JoinInts(ch.Closed)) + "\n")
 			}
 		}
+		accepted := 0
 		for _, f := range s.Findings {
+			if f.Accepted != nil {
+				accepted++
+				continue
+			}
 			if f.Risk >= knowledge.RiskHigh {
 				port := "*"
 				if f.Port != 0 {
@@ -221,6 +237,9 @@ func Summary(rep *audit.Report, lang string) string {
 				}
 				fmt.Fprintf(&b, "  [%s] %s %s\n", strings.ToUpper(t("risk.high")), port, f.Title)
 			}
+		}
+		if accepted > 0 {
+			b.WriteString(t("s.accepted", accepted) + "\n")
 		}
 	}
 	for _, e := range rep.Errors {

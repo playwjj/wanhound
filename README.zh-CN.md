@@ -158,6 +158,21 @@ Findings (worst first):
 | `--data-dir` | `~/.local/share/wanhound` | 也可用 `WANHOUND_DATA`。 |
 | `--lang` | 随系统语言 | 报告语言：`zh` / `en`（也可用 `WANHOUND_LANG`）。 |
 
+### 已接受的风险：只对新问题告警
+
+有些问题一时修不了，比如运营商光猫的设置你改不动。可以把它记录为"已接受的风险"，写明理由和有效期，这样定时审计不再为它反复告警，只对新出现的问题告警：
+
+```bash
+./wanhound accept --label home --rule KU-001 --port 53 --reason "光猫 DNS，计划改桥接时处理" --days 90
+./wanhound accept --list
+./wanhound accept --remove <编号>
+```
+
+- 已接受的风险仍会出现在每份报告中，标注"已接受"和理由，但不再计入最高风险、退出码和 Telegram 告警，也不再参与整体组合规则。
+- 按"标签 + 规则 + 端口"记录，并且会到期（最长一年）：到期后重新告警，报告会说明接受已失效。
+- 新开放的端口始终会告警。
+- Web 界面中每条结论都有"接受此风险…"按钮；"已接受风险"页面可以查看和移除。每次操作都记入审计日志。
+
 ### 配合 LanHound：逐个审计设备的 IPv6
 
 IPv6 没有 NAT，家里每台设备都有自己的公网地址，而这些地址只有在局域网里才看得到。把 [LanHound](https://github.com/playwjj/lanhound) 设备表导出的 CSV（设备页的导出，即 `/api/devices.csv`）交给 WanHound，它会取出每台设备的公网 IPv6，**逐个**审计——仍然是单目标审计，不做网段扫描：
@@ -227,6 +242,7 @@ export WANHOUND_PASSWORD_HASH=$(echo 'choose-a-strong-one' | ./wanhound hash-pas
 - **P1 — 已完成**：TLS/HTTP 深度识别、组合规则、按标签的快照对比、扫描位置自检、UDP 小集，以及带进度、报告、历史时间线和并排对比的 Web UI 和全套访问控制。
 - **P2 — 已完成**：独立 HTML 报告导出 ✔、Telegram 推送 ✔、读取 LanHound 导出的设备清单逐个审计 IPv6 ✔（仍是单目标审计，不做网段扫描）。
 - **v0.3** — 中文报告（终端、HTML、Web 界面、Telegram 摘要）。
+- **v0.5** — 已接受的风险（理由 + 有效期，到期前不再告警）；扫描源状态更清晰；需要 SNI 的 TLS 端口识别为 HTTPS。
 - **v0.4** — Web 界面支持 LanHound 批量导入；快照/标签删除与 `audit.log` 轮转；macOS / Windows 二进制；ipinfo token。
 
 ## 已知局限

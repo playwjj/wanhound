@@ -148,3 +148,50 @@ func TestAuditCancel(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+func TestAcceptedRiskStopsAlerting(t *testing.T) {
+	st, _ := store.Open(t.TempDir())
+	db := listen(t, "5.7.33-MySQL Community Server mysql_native_password\n")
+	spare := freePort(t)
+	req := audit.Request{IPv4: "127.0.0.1", Label: "home", PortSet: "custom", Ports: []int{db, spare},
+		Lab: true, Offline: true, Timeout: 300 * time.Millisecond}
+	run := func() *audit.Report {
+		rep, err := audit.Run(context.Background(), st, req, audit.Hooks{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	if rep := run(); rep.ExitCode != 1 {
+		t.Fatalf("exposed database: exit %d, want 1", rep.ExitCode)
+	}
+	if _, err := st.Accept("home", "KH-032", db, "test database, closing next week", 30); err != nil {
+		t.Fatal(err)
+	}
+	rep := run()
+	if rep.ExitCode != 0 {
+		t.Errorf("accepted risk, nothing new: exit %d, want 0", rep.ExitCode)
+	}
+	var accepted bool
+	for _, f := range rep.Targets[0].Findings {
+		accepted = accepted || (f.RuleID == "KH-032" && f.Accepted != nil)
+	}
+	if !accepted {
+		t.Error("the accepted finding must still be reported, marked as accepted")
+	}
+	var buf bytes.Buffer
+	report.Print(&buf, rep, false, "zh")
+	if !strings.Contains(buf.String(), "已接受") {
+		t.Errorf("report does not mark the accepted risk:\n%s", buf.String())
+	}
+
+	// A new open port still alerts, acceptance or not.
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", itoa(spare)))
+	if err != nil {
+		t.Skip("spare port taken")
+	}
+	defer ln.Close()
+	if rep := run(); rep.ExitCode != 1 {
+		t.Errorf("new open port: exit %d, want 1", rep.ExitCode)
+	}
+}
